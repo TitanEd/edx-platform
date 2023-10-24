@@ -146,3 +146,10 @@ dist
 
 # Locally generated PII reports
 pii_report
+blogs-app
+control-hub
+event-management
+openai-tools
+shoppingcart-app
+themes/demo-theme
+xblocks
