@@ -60,6 +60,7 @@ class SiteConfiguration(models.Model):
             Configuration value for the given key or returns `None` if configuration is not enabled.
         """
         if self.enabled:
+            self.refresh_from_db()
             try:
                 return self.site_values.get(name, default)
             except AttributeError as error:
