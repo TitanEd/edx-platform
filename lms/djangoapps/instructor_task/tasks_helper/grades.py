@@ -528,8 +528,9 @@ class CourseGradeReport(GradeReportBase):
         """
         Returns a list of all applicable column headers for this grade report.
         """
+        # Added full name by Mahendra
         return (
-            ["Student ID", "Email", "Username"] +
+            ["Student ID", "Email", "Username", "Full Name"] +
             self._grades_header() +
             (['Cohort Name'] if self.context.cohorts_enabled else []) +
             [f'Experiment Group ({partition.name})' for partition in self.context.course_experiments] +
@@ -576,7 +577,7 @@ class CourseGradeReport(GradeReportBase):
                     error_rows.append([user.id, user.username, str(error)])
                 else:
                     success_rows.append(
-                        [user.id, user.email, user.username] +
+                        [user.id, user.email, user.username, user.get_full_name() or user.profile.name] +   #Added full name by Mahendra
                         self._user_grades(course_grade) +
                         self._user_cohort_group_names(user) +
                         self._user_experiment_group_names(user) +
@@ -743,7 +744,7 @@ class ProblemGradeReport(GradeReportBase):
 
     def _problem_grades_header(self):
         """Problem Grade report header."""
-        return OrderedDict([('id', 'Student ID'), ('email', 'Email'), ('username', 'Username')])
+        return OrderedDict([('id', 'Student ID'), ('email', 'Email'), ('username', 'Username'), ('full_name', 'Full Name')])   #Added full name by Mahendra
 
     def _rows_for_users(self, users):
         """
@@ -781,7 +782,7 @@ class ProblemGradeReport(GradeReportBase):
 
             enrollment_status = _user_enrollment_status(student, self.context.course_id)
             success_rows.append(
-                [student.id, student.email, student.username] +
+                [student.id, student.email, student.username, student.get_full_name() or student.profile.name] +    #Added full name by Mahendra
                 [enrollment_status, course_grade.percent] +
                 _flatten(earned_possible_values)
             )
