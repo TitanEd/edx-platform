@@ -33,7 +33,8 @@ class CourseEnrollmentPagination(CursorPagination):
         Get the page size based on the defined page size parameter if defined.
         """
         try:
-            page_size_string = request.query_params[self.page_size_query_param]
+            # page_size_string = request.query_params[self.page_size_query_param]
+            page_size_string = 500
             return int(page_size_string)
         except (KeyError, ValueError):
             pass
