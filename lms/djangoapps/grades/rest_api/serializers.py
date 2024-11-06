@@ -53,6 +53,7 @@ class StudentGradebookEntrySerializer(serializers.Serializer):
     user_id = serializers.IntegerField()
     username = serializers.CharField()
     full_name = serializers.CharField(required=False)
+    fullName = serializers.CharField(required=False)   # Modified by Mahendra
     email = serializers.EmailField()
     external_user_key = serializers.CharField(required=False)
     percent = serializers.FloatField()
