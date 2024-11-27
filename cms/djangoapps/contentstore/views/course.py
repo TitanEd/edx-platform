@@ -63,6 +63,7 @@ from openedx.core.djangoapps.content_staging import api as content_staging_api
 from openedx.core.djangoapps.credit.tasks import update_credit_course_requirements
 from openedx.core.djangoapps.models.course_details import CourseDetails
 from openedx.core.djangoapps.site_configuration import helpers as configuration_helpers
+from openedx.core.djangoapps.user_api.models import UserPreference
 from openedx.core.djangolib.js_utils import dump_js_escaped_json
 from openedx.core.lib.course_tabs import CourseTabPluginManager
 from openedx.features.content_type_gating.models import ContentTypeGatingConfig
@@ -628,6 +629,7 @@ def course_index(request, course_key):
             raise Http404
         if use_new_course_outline_page(course_key):
             return redirect(get_course_outline_url(course_key))
+        user_timezone = UserPreference.get_value(request.user, 'time_zone')
         lms_link = get_lms_link_for_item(course_block.location)
         reindex_link = None
         if settings.FEATURES.get('ENABLE_COURSEWARE_INDEX', False):
@@ -672,6 +674,7 @@ def course_index(request, course_key):
             'course_structure': course_structure,
             'initial_state': course_outline_initial_state(locator_to_show, course_structure) if locator_to_show else None,  # lint-amnesty, pylint: disable=line-too-long
             'initial_user_clipboard': user_clipboard,
+            'user_timezone': user_timezone,
             'rerun_notification_id': current_action.id if current_action else None,
             'course_release_date': course_release_date,
             'settings_url': settings_url,
@@ -1109,6 +1112,7 @@ def settings_handler(request, course_key_string):  # lint-amnesty, pylint: disab
         elif 'application/json' in request.META.get('HTTP_ACCEPT', ''):  # pylint: disable=too-many-nested-blocks
             if request.method == 'GET':
                 course_details = CourseDetails.fetch(course_key)
+                course_details.user_timezone = user_timezone
                 return JsonResponse(
                     course_details,
                     # encoder serializes dates, old locations, and instances

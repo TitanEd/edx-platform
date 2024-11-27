@@ -368,6 +368,48 @@ define(['jquery', 'backbone', 'underscore', 'gettext', 'js/views/baseview',
         }
     });
 
+
+    // BaseDateEditor = AbstractEditor.extend({
+    //     fieldName: null,
+
+    //     events: {
+    //         'click .clear-date': 'clearValue'
+    //     },
+
+    //     afterRender: function() {
+    //         AbstractEditor.prototype.afterRender.call(this);
+            
+    //         // Initialize datepicker and timepicker
+    //         this.$('input.date').datepicker({ dateFormat: 'm/d/yy' });
+    //         this.$('input.time').timepicker({
+    //             timeFormat: 'H:i',
+    //             forceRoundTime: false
+    //         });
+
+    //         // Get the user’s timezone (passed from the backend)
+    //         var userTimezone = this.options.user_timezone || "UTC"; // Default to UTC if not provided
+
+    //         // If the field has a date value
+    //         if (this.model.get(this.fieldName)) {
+    //             var utcDate = this.model.get(this.fieldName);
+    //             var convertedDate = this.convertUTCtoUserTimezone(utcDate, userTimezone);
+
+    //             // Set the date and time fields with the converted date
+    //             DateUtils.setDate(
+    //                 this.$('input.date'),
+    //                 this.$('input.time'),
+    //                 moment(convertedDate).format('YYYY-MM-DD'),
+    //                 moment(convertedDate).format('HH:mm')
+    //             );
+    //         }
+    //     },
+
+    //     // Function to convert UTC to user's timezone using Moment.js
+    //     convertUTCtoUserTimezone: function(utcTime, userTimezone) {
+    //         return moment.utc(utcTime).tz(userTimezone, true).toISOString();
+    //     }
+    // });    
+
     DueDateEditor = BaseDateEditor.extend({
         fieldName: 'due',
         templateName: 'due-date-editor',

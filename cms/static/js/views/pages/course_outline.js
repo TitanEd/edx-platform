@@ -92,6 +92,8 @@ function($, _, gettext, BasePage, XBlockViewUtils, CourseOutlineView, ViewUtils,
                 $('.wrapper-alert-announcement').removeClass('is-shown').addClass('is-hidden');
             }));
             this.clipboardManager = new ClipboardManager(this.options.initialUserClipboard);
+            this.user_timezone = this.options.user_timezone
+            // debugger;
         },
 
         setCollapseExpandVisibility: function() {
@@ -151,8 +153,10 @@ function($, _, gettext, BasePage, XBlockViewUtils, CourseOutlineView, ViewUtils,
                 initialState: this.initialState,
                 expandedLocators: this.expandedLocators,
                 clipboardManager: this.clipboardManager,
+                user_timezone: this.user_timezone,
             });
             this.outlineView.render();
+            // debugger;
             this.outlineView.setViewState(this.initialState || {});
             return $.Deferred().resolve().promise();
         },

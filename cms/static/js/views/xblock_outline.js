@@ -42,6 +42,7 @@ function($, _, gettext, BaseView, ViewUtils, XBlockViewUtils, XBlockStringFieldE
             this.renderedChildren = false;
             this.model.on('sync', this.onSync, this);
             this.clipboardManager = this.options.clipboardManager; // May be undefined if not on the course outline page
+            this.user_timezone =this.options.user_timezone;
         },
 
         render: function() {
@@ -129,6 +130,43 @@ function($, _, gettext, BaseView, ViewUtils, XBlockViewUtils, XBlockStringFieldE
             }
             this.renderedChildren = true;
         },
+
+
+ // renderChildren: function() {
+ //            var self = this,
+ //                parentInfo = this.model;
+ //            if (parentInfo.get('child_info')) {
+ //                _.each(this.model.get('child_info').children, function(childInfo) {
+ //                    console.log('childInfo:', childInfo);
+ //                    const { edited_on: editedOn } = childInfo.attributes || {};
+ //                    console.log('Edited On:', editedOn); 
+
+ //                    if (editedOn) {
+ //                        let momentDate = moment(editedOn, "MMM DD, YYYY [at] HH:mm [UTC]");
+ //                        console.log('Moment Date:', momentDate);
+ //                        if (momentDate.isValid()) {
+ //                            let formattedISTDate = momentDate.utcOffset(5.5 * 60).format('MMM D, YYYY HH:mm') + ' IST'; 
+ //                            console.log('Formatted IST Date:', formattedISTDate);
+ //                            childInfo.istDate = formattedISTDate;
+ //                          } else {
+ //                            console.log('Error: Invalid Date');
+ //                          }
+ //                      } else {
+ //                          console.log('Invalid UTC Date or UTC Date Missing');
+ //                      }
+
+ //                    var childOutlineView = self.createChildView(childInfo, parentInfo);
+ //                    console.log('Updating .status-release-value with:', '<span class="icon fa fa-clock-o" aria-hidden="true"></span> Scheduled: ' + childInfo.istDate);
+ //                    console.log('IST Date to Append:', childInfo.istDate);
+ //                    childOutlineView.$el.find('.status-release-value').html(
+ //                        '<span class="icon fa fa-clock-o" aria-hidden="true"></span> Scheduled: ' + childInfo.istDate
+ //                    );
+ //                    childOutlineView.render();
+ //                    self.addChildView(childOutlineView);
+ //                });
+ //            }
+ //            this.renderedChildren = true;
+ //        },
 
         getListElement: function() {
             return this.$('> .outline-content > ol');
@@ -223,6 +261,7 @@ function($, _, gettext, BaseView, ViewUtils, XBlockViewUtils, XBlockStringFieldE
                 expandedLocators: this.expandedLocators,
                 template: this.template,
                 clipboardManager: this.clipboardManager,
+                user_timezone: this.user_timezone,
             }, options));
         },
 

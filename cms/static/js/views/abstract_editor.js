@@ -8,6 +8,7 @@ define(['js/views/baseview', 'underscore'], function(BaseView, _) {
             // Backbone model cid is only unique within the collection.
             this.uniqueId = _.uniqueId(templateName + '_');
             this.template = this.loadTemplate(templateName);
+            this.user_timezone =this.options.user_timezone
             // xss-lint: disable=javascript-jquery-html
             this.$el.html(this.template({model: this.model, uniqueId: this.uniqueId}));
             this.listenTo(this.model, 'change', this.render);
