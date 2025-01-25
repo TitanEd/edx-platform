@@ -6,8 +6,8 @@ Serializers for all Course Enrollment related return objects.
 import logging
 
 from rest_framework import serializers
-
-from common.djangoapps.course_modes.models import CourseMode
+from django.conf import settings
+from common.djangoapps.course_modes.models import CourseMode, Mode
 from common.djangoapps.student.models import (CourseEnrollment,
                                               CourseEnrollmentAllowed)
 
@@ -64,6 +64,7 @@ class CourseSerializer(serializers.Serializer):  # pylint: disable=abstract-meth
             include_expired=self.include_expired,
             only_selectable=False
         )
+        course_modes += [Mode("masters", "Masters", 0, '', settings.COURSE_MODE_DEFAULTS['currency'], None, None, None, None, None, None)]
         return [
             ModeSerializer(mode).data
             for mode in course_modes
