@@ -133,8 +133,9 @@ def index(request, extra_context=None, user=AnonymousUser()):
     if extra_context is None:
         extra_context = {}
 
-    courses = get_courses(user)
-
+    # Updated by Mahendra
+    # courses = get_courses(user)
+    courses = list()
     if configuration_helpers.get_value(
         "ENABLE_COURSE_SORTING_BY_START_DATE",
         settings.FEATURES["ENABLE_COURSE_SORTING_BY_START_DATE"],
