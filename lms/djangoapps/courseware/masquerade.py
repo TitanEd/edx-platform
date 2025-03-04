@@ -125,7 +125,7 @@ class MasqueradeView(View):
             },
             'available': [
                 {
-                    'name': 'Staff',
+                    'name': _('Staff'),
                     'role': 'staff',
                 },
             ],
@@ -137,7 +137,7 @@ class MasqueradeView(View):
             })
 
         data['available'].append({
-            'name': 'Specific Student...',
+            'name': _('Specific Student...'),
             'role': 'student',
             'user_name': course.user_name or '',
         })
