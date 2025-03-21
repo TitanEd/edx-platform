@@ -990,7 +990,7 @@ class ProblemResponses:
                                 user_response["Last Submission Date & Time"] = (formatted_time)
                                 user_response["Attempts Used"] = response_state.get("attempts")
                                 submission_history = []
-                                for i, score in enumerate(response_state.get("score_history"), 1):
+                                for i, score in enumerate(response_state.get("score_history", list()), 1):
                                     earned = score.get("raw_earned", 0)
                                     possible = score.get("raw_possible", 0)
                                     submission_history.append(f"Attempt {i}: {earned}/{possible}")
