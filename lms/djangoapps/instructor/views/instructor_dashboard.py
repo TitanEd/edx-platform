@@ -635,6 +635,7 @@ def _section_data_download(course, access):
         settings.FEATURES.get('ENABLE_SPECIAL_EXAMS', False) and
         course.enable_proctored_exams
     )
+    is_small_course = CourseEnrollment.objects.is_small_course(course_key)
     section_key = 'data_download_2' if data_download_v2_is_enabled() else 'data_download'
     section_data = {
         'section_key': section_key,
@@ -667,9 +668,15 @@ def _section_data_download(course, access):
             'export_ora2_submission_files', kwargs={'course_id': str(course_key)}
         ),
         'export_ora2_summary_url': reverse('export_ora2_summary', kwargs={'course_id': str(course_key)}),
+        'is_small_course':  is_small_course,  #Added by Mahendra 
+        'spoc_gradebook_url': reverse('spoc_gradebook', kwargs={'course_id': str(course_key)}), #Added by Mahendra 
     }
     if not access.get('data_researcher'):
         section_data['is_hidden'] = True
+
+    # Added by Mahendra
+    if is_writable_gradebook_enabled(course_key) and settings.WRITABLE_GRADEBOOK_URL:
+        section_data['writable_gradebook_url'] = f'{settings.WRITABLE_GRADEBOOK_URL}/{str(course_key)}'
     return section_data
 
 

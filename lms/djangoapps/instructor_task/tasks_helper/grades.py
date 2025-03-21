@@ -5,8 +5,10 @@ Functionality for generating grade reports.
 import csv
 import logging
 import re
+import json
 from collections import OrderedDict, defaultdict
 from datetime import datetime
+from django.utils import timezone
 from itertools import chain
 from tempfile import TemporaryFile
 
@@ -825,6 +827,28 @@ class ProblemResponses:
         return list(reversed(path))
 
     @classmethod
+    def _success_headers(cls):   #Added by Mahendra
+        """
+        Returns a list of all applicable column headers for this grade report.
+        """
+        # Added full name by Mahendra
+        return [
+            "Email",
+            "Full Name",
+            "Assessment Title",
+            "Assessment Location",
+            "Question Text",
+            "Student Response",
+            "Correct Response",
+            "Maximum Score",
+            "Achieved Score",
+            "Last Submission Date & Time",
+            "Attempts Used",
+            "Submission History",
+        ]
+
+
+    @classmethod
     def _build_problem_list(cls, course_blocks, root, path=None):
         """
         Generate a tuple of display names, block location paths and block keys
@@ -922,6 +946,12 @@ class ProblemResponses:
                         response['block_key'] = str(block_key)
                         # A block that has a single state per user can contain multiple responses
                         # within the same state.
+                        # Added by Mahendra
+                        user = get_user_model().objects.get(username=response['username'])
+                        response['Email'] = user.email
+                        response['Full Name'] = user.get_full_name() or user.profile.name
+                        response['Assessment Title'] = title
+                        response['Assessment Location'] = ' > '.join(base_path + path)
                         user_states = generated_report_data.get(response['username'])
                         if user_states:
                             # For each response in the block, copy over the basic data like the
@@ -937,7 +967,34 @@ class ProblemResponses:
                                     user_state_keys = sorted(user_state.keys())
                                 for key in user_state_keys:
                                     student_data_keys[key] = 1
-
+                                # Added by Mahendra
+                                user_response["Question Text"] = user_state.get("Question", "")
+                                user_response["Student Response"] = user_state.get("Answer", "")
+                                user_response["Correct Response"] = user_state.get("Correct Answer", "")
+                                response_state = json.loads(user_response.get("state", "{}"))
+                                user_response["Maximum Score"] = response_state.get("score", {}).get("raw_possible", 0)
+                                user_response["Achieved Score"] = response_state.get("score", {}).get("raw_earned", 0)
+                                formatted_time = (
+                                    timezone.make_aware(
+                                        datetime.strptime(
+                                            response_state.get(
+                                                "last_submission_time", ""
+                                            ),
+                                            "%Y-%m-%dT%H:%M:%SZ",
+                                        ),
+                                        timezone.utc,
+                                    )
+                                    .astimezone(timezone.get_current_timezone())
+                                    .strftime("%b %d, %Y, %I:%M %p")
+                                )
+                                user_response["Last Submission Date & Time"] = (formatted_time)
+                                user_response["Attempts Used"] = response_state.get("attempts")
+                                submission_history = []
+                                for i, score in enumerate(response_state.get("score_history"), 1):
+                                    earned = score.get("raw_earned", 0)
+                                    possible = score.get("raw_possible", 0)
+                                    submission_history.append(f"Attempt {i}: {earned}/{possible}")
+                                user_response["Submission History"] = ", ".join(submission_history)
                                 responses.append(user_response)
                         else:
                             responses.append(response)
@@ -952,11 +1009,7 @@ class ProblemResponses:
         # Keep the keys in a useful order, starting with username, title and location,
         # then the columns returned by the xblock report generator in sorted order and
         # finally end with the more machine friendly block_key and state.
-        student_data_keys_list = (
-            ['username', 'title', 'location'] +
-            list(student_data_keys.keys()) +
-            ['block_key', 'state']
-        )
+        student_data_keys_list = cls._success_headers()
 
         return student_data, student_data_keys_list
 

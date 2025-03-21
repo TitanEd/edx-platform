@@ -350,7 +350,7 @@ def list_problem_responses(course_key, problem_location, limit_responses=None):
         course_id=course_key,
         module_state_key=problem_key
     ).select_related('student')
-    smdat = smdat.order_by('student')
+    smdat = smdat.order_by('student__email')
     if limit_responses is not None:
         smdat = smdat[:limit_responses]
 
