@@ -133,20 +133,21 @@ def instructor_dashboard_2(request, course_id):  # lint-amnesty, pylint: disable
         raise Http404()
 
     sections = []
-    if access['staff']:
+    if access['admin'] or access['staff']: # added by Yagnesh
         sections_content = [
             _section_course_info(course, access),
             _section_membership(course, access),
             _section_cohort_management(course, access),
             _section_student_admin(course, access),
+            _section_data_download(course, access),
         ]
 
         if legacy_discussion_experience_enabled(course_key):
             sections_content.append(_section_discussions_management(course, access))
         sections.extend(sections_content)
 
-    if access['data_researcher']:
-        sections.append(_section_data_download(course, access))
+    # if access['data_researcher']:
+    #     sections.append(_section_data_download(course, access))
 
     analytics_dashboard_message = None
     if show_analytics_dashboard_message(course_key) and (access['staff'] or access['instructor']):
@@ -207,7 +208,8 @@ def instructor_dashboard_2(request, course_id):  # lint-amnesty, pylint: disable
     certs_enabled = CertificateGenerationConfiguration.current().enabled and not hasattr(course_key, 'ccx')
     certs_instructor_enabled = settings.FEATURES.get('ENABLE_CERTIFICATES_INSTRUCTOR_MANAGE', False)
 
-    if certs_enabled and (access['admin'] or (access['instructor'] and certs_instructor_enabled)):
+    # added by Yagnesh
+    if certs_enabled and (access['admin'] or access['staff'] or (access['instructor'] and certs_instructor_enabled)):
         sections.append(_section_certificates(course))
 
     openassessment_blocks = modulestore().get_items(
@@ -671,8 +673,8 @@ def _section_data_download(course, access):
         'is_small_course':  is_small_course,  #Added by Mahendra 
         'spoc_gradebook_url': reverse('spoc_gradebook', kwargs={'course_id': str(course_key)}), #Added by Mahendra 
     }
-    if not access.get('data_researcher'):
-        section_data['is_hidden'] = True
+    # if not access.get('data_researcher'):
+    #     section_data['is_hidden'] = True
 
     # Added by Mahendra
     if is_writable_gradebook_enabled(course_key) and settings.WRITABLE_GRADEBOOK_URL:
