@@ -8,6 +8,7 @@ from rest_framework.permissions import BasePermission
 
 from lms.djangoapps.courseware.rules import HasAccessRule, HasRolesRule
 from openedx.core.lib.courses import get_course_by_id
+from custom_extensions.waffle import ENABLE_EXTENDED_COURSE_STAFF_PERMISSIONS
 
 ALLOW_STUDENT_TO_BYPASS_ENTRANCE_EXAM = 'instructor.allow_student_to_bypass_entrance_exam'
 ASSIGN_TO_COHORTS = 'instructor.assign_to_cohorts'
@@ -38,24 +39,42 @@ VIEW_DASHBOARD = 'instructor.dashboard'
 VIEW_ENROLLMENTS = 'instructor.view_enrollments'
 VIEW_FORUM_MEMBERS = 'instructor.view_forum_members'
 
-
-perms[ALLOW_STUDENT_TO_BYPASS_ENTRANCE_EXAM] = HasAccessRule('staff')
-perms[ASSIGN_TO_COHORTS] = HasAccessRule('staff')
-perms[EDIT_COURSE_ACCESS] = HasAccessRule('instructor')
-perms[EDIT_FORUM_ROLES] = HasAccessRule('staff')
-perms[EDIT_INVOICE_VALIDATION] = HasAccessRule('staff')
-perms[ENABLE_CERTIFICATE_GENERATION] = is_staff | HasAccessRule('instructor')
-perms[GENERATE_CERTIFICATE_EXCEPTIONS] = is_staff | HasAccessRule('instructor')
-perms[GENERATE_BULK_CERTIFICATE_EXCEPTIONS] = is_staff | HasAccessRule('instructor')
-perms[START_CERTIFICATE_GENERATION] = is_staff | HasAccessRule('instructor')
-perms[START_CERTIFICATE_REGENERATION] = is_staff | HasAccessRule('instructor')
-perms[CERTIFICATE_EXCEPTION_VIEW] = is_staff | HasAccessRule('instructor')
-perms[CERTIFICATE_INVALIDATION_VIEW] = is_staff | HasAccessRule('instructor')
-perms[GIVE_STUDENT_EXTENSION] = HasAccessRule('staff')
-perms[VIEW_ISSUED_CERTIFICATES] = HasAccessRule('staff') | HasRolesRule('data_researcher')
 # only global staff or those with the data_researcher role can access the data download tab
 # HasAccessRule('staff') also includes course staff
-perms[CAN_RESEARCH] = is_staff | HasRolesRule('data_researcher')
+# Added by Mahendra
+if ENABLE_EXTENDED_COURSE_STAFF_PERMISSIONS.is_enabled():
+    perms[CAN_RESEARCH] = is_staff | HasRolesRule('data_researcher') | HasAccessRule('instructor') | HasAccessRule('staff')
+    perms[ALLOW_STUDENT_TO_BYPASS_ENTRANCE_EXAM] = HasAccessRule('staff') | HasAccessRule('instructor')
+    perms[ASSIGN_TO_COHORTS] = HasAccessRule('staff') | HasAccessRule('instructor')
+    perms[EDIT_COURSE_ACCESS] = HasAccessRule('instructor') | HasAccessRule('staff')
+    perms[EDIT_FORUM_ROLES] = HasAccessRule('staff') | HasAccessRule('instructor') | HasAccessRule('staff')
+    perms[EDIT_INVOICE_VALIDATION] = HasAccessRule('staff') | HasAccessRule('instructor') | HasAccessRule('staff')
+    perms[ENABLE_CERTIFICATE_GENERATION] = is_staff | HasAccessRule('instructor') | HasAccessRule('staff')
+    perms[GENERATE_CERTIFICATE_EXCEPTIONS] = is_staff | HasAccessRule('instructor') | HasAccessRule('staff')
+    perms[GENERATE_BULK_CERTIFICATE_EXCEPTIONS] = is_staff | HasAccessRule('instructor') | HasAccessRule('staff')
+    perms[START_CERTIFICATE_GENERATION] = is_staff | HasAccessRule('instructor') | HasAccessRule('staff')
+    perms[START_CERTIFICATE_REGENERATION] = is_staff | HasAccessRule('instructor') | HasAccessRule('staff')
+    perms[CERTIFICATE_EXCEPTION_VIEW] = is_staff | HasAccessRule('instructor') | HasAccessRule('staff')
+    perms[CERTIFICATE_INVALIDATION_VIEW] = is_staff | HasAccessRule('instructor') | HasAccessRule('staff')
+    perms[GIVE_STUDENT_EXTENSION] = HasAccessRule('staff') | HasAccessRule('instructor')
+    perms[VIEW_ISSUED_CERTIFICATES] = HasAccessRule('staff') | HasRolesRule('data_researcher') | HasAccessRule('instructor')
+else:
+    perms[CAN_RESEARCH] = is_staff | HasRolesRule('data_researcher')
+    perms[ALLOW_STUDENT_TO_BYPASS_ENTRANCE_EXAM] = HasAccessRule('staff')
+    perms[ASSIGN_TO_COHORTS] = HasAccessRule('staff')
+    perms[EDIT_COURSE_ACCESS] = HasAccessRule('instructor')
+    perms[EDIT_FORUM_ROLES] = HasAccessRule('staff')
+    perms[EDIT_INVOICE_VALIDATION] = HasAccessRule('staff')
+    perms[ENABLE_CERTIFICATE_GENERATION] = is_staff | HasAccessRule('instructor')
+    perms[GENERATE_CERTIFICATE_EXCEPTIONS] = is_staff | HasAccessRule('instructor')
+    perms[GENERATE_BULK_CERTIFICATE_EXCEPTIONS] = is_staff | HasAccessRule('instructor')
+    perms[START_CERTIFICATE_GENERATION] = is_staff | HasAccessRule('instructor')
+    perms[START_CERTIFICATE_REGENERATION] = is_staff | HasAccessRule('instructor')
+    perms[CERTIFICATE_EXCEPTION_VIEW] = is_staff | HasAccessRule('instructor')
+    perms[CERTIFICATE_INVALIDATION_VIEW] = is_staff | HasAccessRule('instructor')
+    perms[GIVE_STUDENT_EXTENSION] = HasAccessRule('staff')
+    perms[VIEW_ISSUED_CERTIFICATES] = HasAccessRule('staff') | HasRolesRule('data_researcher')
+
 perms[CAN_ENROLL] = HasAccessRule('staff')
 perms[CAN_BETATEST] = HasAccessRule('instructor')
 perms[ENROLLMENT_REPORT] = HasAccessRule('staff') | HasRolesRule('data_researcher')
