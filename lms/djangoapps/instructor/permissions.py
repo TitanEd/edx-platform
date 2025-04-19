@@ -8,7 +8,7 @@ from rest_framework.permissions import BasePermission
 
 from lms.djangoapps.courseware.rules import HasAccessRule, HasRolesRule
 from openedx.core.lib.courses import get_course_by_id
-from custom_extensions.waffle import ENABLE_EXTENDED_COURSE_STAFF_PERMISSIONS
+from custom_extensions.waffle import enable_extended_research_perms
 
 ALLOW_STUDENT_TO_BYPASS_ENTRANCE_EXAM = 'instructor.allow_student_to_bypass_entrance_exam'
 ASSIGN_TO_COHORTS = 'instructor.assign_to_cohorts'
@@ -42,7 +42,7 @@ VIEW_FORUM_MEMBERS = 'instructor.view_forum_members'
 # only global staff or those with the data_researcher role can access the data download tab
 # HasAccessRule('staff') also includes course staff
 # Added by Mahendra
-if ENABLE_EXTENDED_COURSE_STAFF_PERMISSIONS.is_enabled():
+if enable_extended_research_perms():
     perms[CAN_RESEARCH] = is_staff | HasRolesRule('data_researcher') | HasAccessRule('instructor') | HasAccessRule('staff')
     perms[ALLOW_STUDENT_TO_BYPASS_ENTRANCE_EXAM] = HasAccessRule('staff') | HasAccessRule('instructor')
     perms[ASSIGN_TO_COHORTS] = HasAccessRule('staff') | HasAccessRule('instructor')
