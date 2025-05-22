@@ -122,7 +122,7 @@ from ..utils import (
     update_course_discussions_settings,
 )
 from .component import ADVANCED_COMPONENT_TYPES
-from admin_dashboard.notification import get_default_start_date as get_dynamic_start_date, get_grading_policy
+from custom_extensions.waffle import get_default_start_date as get_dynamic_start_date, get_grading_policy
 
 log = logging.getLogger(__name__)
 User = get_user_model()
@@ -1008,8 +1008,8 @@ def create_new_course_in_store(store, user, org, number, run, fields):
     fields.update({
         'language': getattr(settings, 'DEFAULT_COURSE_LANGUAGE', 'en'),
         'cert_html_view_enabled': True,
-        'start': get_dynamic_start_date(),  # Use dynamic start date
-        'grading_policy': get_grading_policy(),  # Use dynamic grading policy
+        'start': get_dynamic_start_date(),
+        'grading_policy': get_grading_policy(),
     })
 
     with modulestore().default_store(store):

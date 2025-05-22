@@ -87,20 +87,20 @@ CUSTOM_GRADING_POLICY = {
 
 def get_dynamic_start_date():
     """
-    Returns the dynamic start date, deferring to notification.py for Waffle switch logic.
+    Returns the dynamic start date, deferring to custom_extensions.waffle for Waffle switch logic.
     """
     try:
-        from admin_dashboard.notification import get_default_start_date
+        from custom_extensions.waffle import get_default_start_date
         return get_default_start_date()
     except ImportError:
         return DEFAULT_START_DATE
 
 def get_dynamic_grading_policy():
     """
-    Returns the dynamic grading policy, deferring to notification.py for Waffle switch logic.
+    Returns the dynamic grading policy, deferring to custom_extensions.waffle for Waffle switch logic.
     """
     try:
-        from admin_dashboard.notification import get_grading_policy
+        from custom_extensions.waffle import get_grading_policy
         return get_grading_policy()
     except ImportError:
         return DEFAULT_GRADING_POLICY
