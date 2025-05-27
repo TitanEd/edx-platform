@@ -51,6 +51,7 @@ from xmodule.split_test_block import get_split_user_partitions  # lint-amnesty, 
 
 from .runner import TaskProgress
 from .utils import upload_csv_to_report_store, upload_csv_file_to_report_store
+from django.utils.translation import gettext as _
 
 TASK_LOG = logging.getLogger('edx.celery.task')
 
@@ -553,11 +554,11 @@ class CourseGradeReport(GradeReportBase):
         Returns the applicable grades-related headers for this report.
         """
         graded_assignments = self.context.graded_assignments
-        grades_header = ["Grade"]
-        for assignment_info in graded_assignments.values():
-            if assignment_info['separate_subsection_avg_headers']:
-                grades_header.extend(assignment_info['subsection_headers'].values())
-            grades_header.append(assignment_info['average_header'])
+        grades_header = ["Grade (Overall)"]
+        for assignment_type, assignment_data in sorted(graded_assignments.items()):
+            if assignment_data.get('separate_subsection_avg_headers', False):
+                grades_header.extend(assignment_data['subsection_headers'].values())  # One column per subsection
+            grades_header.append(assignment_data['average_header'])
         return grades_header
 
     def _rows_for_users(self, users):
@@ -592,43 +593,67 @@ class CourseGradeReport(GradeReportBase):
 
     def _user_grades(self, course_grade):
         """
-        Returns a list of grade results for the given course_grade corresponding
-        to the headers for this report.
+        Returns a list of grade results for the given course_grade, including the overall grade with raw scores.
         """
         grade_results = []
+        total_earned = 0
+        total_possible = 0
+
         for _, assignment_info in self.context.graded_assignments.items():
             subsection_grades, subsection_grades_results = self._user_subsection_grades(
                 course_grade,
                 assignment_info['subsection_headers'],
             )
-            grade_results.extend(subsection_grades_results)
+            grade_results.extend(subsection_grades_results)  # Single combined value per subsection
+
+            # Aggregate raw scores for the overall grade
+            for subsection_grade in subsection_grades:
+                if subsection_grade.graded_total:
+                    possible = subsection_grade.graded_total.possible or 0
+                    earned = subsection_grade.graded_total.earned or 0
+                    if possible > 0:  # Only include subsections with non-zero possible scores
+                        total_earned += earned
+                        total_possible += possible
 
             assignment_average = self._user_assignment_average(course_grade, subsection_grades, assignment_info)
             if assignment_average is not None:
                 grade_results.append([assignment_average])
 
-        return [course_grade.percent] + _flatten(grade_results)
+        # Format the overall grade with raw score (two decimal places)
+        if total_possible == 0:
+            grade_result = f"{course_grade.percent:.2f} (0/0)"
+        else:
+            grade_result = f"{course_grade.percent:.2f} ({int(total_earned)}/{int(total_possible)})"
+
+        return [grade_result] + _flatten(grade_results)
 
     def _user_subsection_grades(self, course_grade, subsection_headers):
         """
-        Returns a list of grade results for the given course_grade corresponding
-        to the headers for this report.
+        Returns a list of grade results for the given course_grade, combining percentage and raw scores.
         """
         subsection_grades = []
         grade_results = []
         for subsection_location in subsection_headers:
             subsection_grade = course_grade.subsection_grade(subsection_location)
+            # Use graded_total for earned and possible scores
+            possible = int(subsection_grade.graded_total.possible or 0) if subsection_grade.graded_total else 0
+            earned = int(subsection_grade.graded_total.earned or 0) if subsection_grade.graded_total else 0
+
             if subsection_grade.attempted_graded or subsection_grade.override:
-                grade_result = subsection_grade.percent_graded
+                # Format percentage to 2 decimal places and combine with raw score
+                grade_result = f"{subsection_grade.percent_graded:.2f} ({earned}/{possible})"
             else:
-                grade_result = 'Not Attempted'
+                # For unattempted subsections or zero possible score
+                grade_result = f"{_('Not Attempted')} (0/{possible})"
+
             grade_results.append([grade_result])
             subsection_grades.append(subsection_grade)
+
         return subsection_grades, grade_results
 
     def _user_assignment_average(self, course_grade, subsection_grades, assignment_info):
         """
-        Returns grade averages for assignment types
+        Returns grade averages for assignment types.
         """
         if assignment_info['separate_subsection_avg_headers']:
             if assignment_info['grader']:
@@ -644,8 +669,7 @@ class CourseGradeReport(GradeReportBase):
 
     def _user_cohort_group_names(self, user):
         """
-        Returns a list of names of cohort groups in which the given user
-        belongs.
+        Returns a list of names of cohort groups in which the given user belongs.
         """
         cohort_group_names = []
         if self.context.cohorts_enabled:
@@ -655,8 +679,7 @@ class CourseGradeReport(GradeReportBase):
 
     def _user_experiment_group_names(self, user):
         """
-        Returns a list of names of course experiments in which the given user
-        belongs.
+        Returns a list of names of course experiments in which the given user belongs.
         """
         experiment_group_names = []
         for partition in self.context.course_experiments:
@@ -675,8 +698,7 @@ class CourseGradeReport(GradeReportBase):
 
     def _user_verification_mode(self, user, bulk_enrollments):
         """
-        Returns a list of enrollment-mode and verification-status for the
-        given user.
+        Returns a list of enrollment-mode and verification-status for the given user.
         """
         enrollment_mode = CourseEnrollment.enrollment_mode_for_user(user, self.context.course_id)[0]
         verification_status = IDVerificationService.verification_status_for_user(
@@ -728,13 +750,18 @@ class ProblemGradeReport(GradeReportBase):
 
     def _success_headers(self):
         """
-        Returns headers for all gradable blocks including fixed headers
-        for report.
-        Returns:
-            list: combined header and scorable blocks
+        Returns a list of all applicable column headers for this grade report.
         """
-        header_row = list(self._problem_grades_header().values()) + ['Enrollment Status', 'Grade']
-        return header_row + _flatten(list(self.context.graded_scorable_blocks_header.values()))
+        return (
+            ["Student ID", "Email", "Username", "Full Name"] +
+            self._grades_header() +
+            (['Cohort Name'] if self.context.cohorts_enabled else []) +
+            [f'Experiment Group ({partition.name})' for partition in self.context.course_experiments] +
+            (['Team Name'] if self.context.teams_enabled else []) +
+            ['Enrollment Track', 'Verification Status'] +
+            ['Certificate Eligible', 'Certificate Delivered', 'Certificate Type'] +
+            ['Enrollment Status']
+    )
 
     def _error_headers(self):
         """
