@@ -1010,6 +1010,7 @@ def create_new_course_in_store(store, user, org, number, run, fields):
         'cert_html_view_enabled': True,
         'start': get_dynamic_start_date(),
         'grading_policy': get_grading_policy(),
+        'advanced_modules': ["annotatable", "videoalpha", "openassessment", "pdf", "edx_sga", "scorm", "mathcraft", "quickquizmaker", "google-document", "survey", "openassessment"]  # Added XBlocks
     })
 
     with modulestore().default_store(store):
