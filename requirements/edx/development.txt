@@ -681,7 +681,7 @@ edx-braze-client==0.2.5
     #   -r requirements/edx/doc.txt
     #   -r requirements/edx/testing.txt
     #   edx-enterprise
--e git+https://github.com/TitanEd/edx-bulk-grades.git
+-e git+https://github.com/TitanEd/edx-bulk-grades.git@tels/v1.1.0#egg=edx-bulk-grades
     # via
     #   -r requirements/edx/doc.txt
     #   -r requirements/edx/testing.txt
