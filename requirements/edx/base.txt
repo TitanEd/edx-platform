@@ -417,7 +417,7 @@ edx-braze-client==0.2.5
     # via
     #   -r requirements/edx/bundled.in
     #   edx-enterprise
-edx-bulk-grades==1.1.0
+-e git+https://github.com/TitanEd/edx-bulk-grades.git
     # via
     #   -r requirements/edx/kernel.in
     #   staff-graded-xblock
