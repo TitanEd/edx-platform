@@ -61,20 +61,21 @@ CUSTOM_GRADING_POLICY = {
     "GRADER": [
         {
             "type": "Written Work",
-            "short_label": "work",
-            "min_count": 12,
-            "drop_count": 2,
+            "short_label": "WW",
+            "min_count": 1,
+            "drop_count": 0,
             "weight": 0.30,
         },
         {
             "type": "Performance Task",
-            "min_count": 12,
-            "drop_count": 2,
+            "short_label": "PT",
+            "min_count": 1,
+            "drop_count": 0,
             "weight": 0.40,
         },
         {
             "type": "Quarterly Assessment",
-            "short_label": "Midterm",
+            "short_label": "QA",
             "min_count": 1,
             "drop_count": 0,
             "weight": 0.30,

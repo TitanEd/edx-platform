@@ -122,11 +122,13 @@ from ..utils import (
     update_course_discussions_settings,
 )
 from .component import ADVANCED_COMPONENT_TYPES
+# Modified import to include get_default_end_date
 try:
-    from custom_extensions.waffle import get_default_start_date as get_dynamic_start_date, get_grading_policy
+    from custom_extensions.waffle import get_default_start_date as get_dynamic_start_date, get_grading_policy, get_default_end_date
 except Exception as e:
-    get_grading_policy = None
     get_dynamic_start_date = None
+    get_grading_policy = None
+    get_default_end_date = None
 
 log = logging.getLogger(__name__)
 User = get_user_model()
@@ -1013,10 +1015,11 @@ def create_new_course_in_store(store, user, org, number, run, fields):
         'language': getattr(settings, 'DEFAULT_COURSE_LANGUAGE', 'en'),
         'cert_html_view_enabled': True,
     })
-    # Added by TitanEd
-    if get_dynamic_start_date and get_grading_policy:
+    # Added by TitanEd ,updated to include end date
+    if get_dynamic_start_date and get_grading_policy and get_default_end_date:
         fields.update({
             'start': get_dynamic_start_date(),
+            'end': get_default_end_date(),
             'grading_policy': get_grading_policy(),
         })
     with modulestore().default_store(store):
