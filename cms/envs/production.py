@@ -616,6 +616,8 @@ EXPLICIT_QUEUES = {
         'queue': UPDATE_SEARCH_INDEX_JOB_QUEUE},
     'cms.djangoapps.contentstore.tasks.export_olx': {
         'queue': HIGH_PRIORITY_QUEUE},
+    'cms.djangoapps.contentstore.tasks.import_olx': {
+        'queue': HIGH_PRIORITY_QUEUE},
 }
 
 LOGO_IMAGE_EXTRA_TEXT = ENV_TOKENS.get('LOGO_IMAGE_EXTRA_TEXT', '')
