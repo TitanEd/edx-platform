@@ -145,6 +145,7 @@ class InheritanceMixin(XBlockMixin):
     max_attempts = Integer(
         display_name=_("Maximum Attempts"),
         help=_("Enter the maximum number of times a student can try to answer problems. By default, Maximum Attempts is set to null, meaning that students have an unlimited number of attempts for problems. You can override this course-wide setting for individual problems. However, if the course-wide setting is a specific number, you cannot set the Maximum Attempts for individual problems to unlimited."),  # lint-amnesty, pylint: disable=line-too-long
+        default=1, # # Set to 1 to enforce one attempt by default per EdQuest team requirement (previously null for unlimited attempts)
         values={"min": 0}, scope=Scope.settings
     )
     matlab_api_key = String(
