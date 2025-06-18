@@ -590,7 +590,6 @@ def get_course_blocks_completion_summary(course_key, user):
     }
 
 
-@request_cached()
 def get_course_assignments(course_key, user, include_access=False, include_without_due=False,):  # lint-amnesty, pylint: disable=too-many-statements
     """
     Returns a list of assignment (at the subsection/sequential level) due dates for the given course.
