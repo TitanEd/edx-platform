@@ -59,7 +59,7 @@ def generate_students_certificates(
 
     statuses_to_regenerate = task_input.get('statuses_to_regenerate', [])
     if student_set is not None and not statuses_to_regenerate:
-        # Skip filtering if specific students are provided and no statuses to regenerate
+        # We want to skip 'filtering students' only when students are given and statuses to regenerate are not
         students_require_certs = students_to_generate_certs_for
     else:
         students_require_certs = students_require_certificate(

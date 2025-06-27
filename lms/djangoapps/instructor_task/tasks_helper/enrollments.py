@@ -8,7 +8,7 @@ from time import time
 from pytz import UTC
 from lms.djangoapps.instructor_analytics.basic import enrolled_students_features, list_may_enroll
 from lms.djangoapps.instructor_analytics.csvs import format_dictlist
-from common.djangoapps.student.models import CourseEnrollment
+from common.djangoapps.student.models import CourseEnrollment  # lint-amnesty, pylint: disable=unused-import
 from lms.djangoapps.instructor_task.tasks_helper.grades import get_excluded_role_user_ids
 
 from .runner import TaskProgress
@@ -53,8 +53,8 @@ def upload_may_enroll_csv(_xblock_instance_args, _entry_id, course_id, task_inpu
 def upload_students_csv(_xblock_instance_args, _entry_id, course_id, task_input, action_name):
     """
     For a given `course_id`, generate a CSV file containing profile
-    information for all students that are enrolled, excluding staff and instructors,
-    and store using a `ReportStore`.
+    information for all students that are enrolled, and store using a
+    `ReportStore`.
     """
     start_time = time()
     start_date = datetime.now(UTC)
@@ -72,7 +72,7 @@ def upload_students_csv(_xblock_instance_args, _entry_id, course_id, task_input,
     current_step = {'step': 'Calculating Profile Info'}
     task_progress.update_task_state(extra_meta=current_step)
 
-    # Compute the student features table
+    # compute the student features table and format it
     query_features = task_input.get('features')
     student_data = enrolled_students_features(course_id, query_features)
 

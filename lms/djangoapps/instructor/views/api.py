@@ -1215,6 +1215,43 @@ class ProblemResponseReportInitiate(DeveloperErrorViewMixin, APIView):
     @transaction.non_atomic_requests
     @method_decorator(require_course_permission(permissions.CAN_RESEARCH))
     def post(self, request, course_id):
+        """
+        Initiate generation of a CSV file containing all student answers
+        to a given problem.
+        **Example requests**
+            POST /api/instructor/v1/reports/{course_id}/generate/problem_responses {
+                "problem_locations": [
+                    "{usage_key1}",
+                    "{usage_key2}",
+                    "{usage_key3}"
+                ]
+            }
+            POST /api/instructor/v1/reports/{course_id}/generate/problem_responses {
+                "problem_locations": ["{usage_key}"],
+                "problem_types_filter": ["problem"]
+            }
+        **POST Parameters**
+        A POST request can include the following parameters:
+        * problem_location: A list of usage keys for the blocks to include in
+          the report. If the location is a block that contains other blocks,
+          (such as the course, section, subsection, or unit blocks) then all
+          blocks under that block will be included in the report.
+        * problem_types_filter: Optional. A comma-separated list of block types
+          to include in the report. If set, only blocks of the specified types
+          will be included in the report.
+        To get data on all the poll and survey blocks in a course, you could
+        POST the usage key of the course for `problem_location`, and
+        "poll, survey" as the value for `problem_types_filter`.
+        **Example Response:**
+        If initiation is successful (or generation task is already running):
+        ```json
+        {
+            "status": "The problem responses report is being created. ...",
+            "task_id": "4e49522f-31d9-431a-9cff-dd2a2bf4c85a"
+        }
+        ```
+        Responds with BadRequest if any of the provided problem locations are faulty.
+        """
         params = ProblemResponseReportPostParamsSerializer(data=request.data)
         params.is_valid(raise_exception=True)
         problem_locations = params.validated_data.get('problem_locations')
@@ -1339,6 +1376,11 @@ class GetGradingConfig(APIView):
 @require_course_permission(permissions.VIEW_ISSUED_CERTIFICATES)
 def get_issued_certificates(request, course_id):
     """
+    Responds with JSON if CSV is not required. contains a list of issued certificates.
+    Arguments:
+        course_id
+    Returns:
+        {"certificates": [{course_id: xyz, mode: 'honor'}, ...]}
     Respond with data on issued certificates for non-staff/non-instructor users, either as a table or CSV.
     """
     course_key = CourseKey.from_string(course_id)
@@ -1399,18 +1441,44 @@ def get_issued_certificates(request, course_id):
 @method_decorator(cache_control(no_cache=True, no_store=True, must_revalidate=True), name='dispatch')
 @method_decorator(transaction.non_atomic_requests, name='dispatch')
 class GetStudentsFeatures(DeveloperErrorViewMixin, APIView):
+    """
+    Respond with json which contains a summary of all enrolled students profile information.
+    Responds with JSON
+        {"students": [{-student-info-}, ...]}
+    TO DO accept requests for different attribute sets.
+    """
     permission_classes = (IsAuthenticated, InstructorPermission)
     permission_name = CAN_RESEARCH
 
     @method_decorator(ensure_csrf_cookie)
     @method_decorator(transaction.non_atomic_requests)
-    def post(self, request, course_id, csv=False):
+    def post(self, request, course_id, csv=False):  # pylint: disable=redefined-outer-name
+        """
+        Handle POST requests to retrieve student profile information for a specific course.
+
+        Args:
+            request: The HTTP request object.
+            course_id: The ID of the course for which to retrieve student information.
+            csv: Optional; if 'csv' is present in the URL, it indicates that the response should be in CSV format.
+            Defaults to None.
+
+        Returns:
+            Response: A JSON response containing student profile information, or CSV if the `csv` parameter is provided.
+        """
         course_key = CourseKey.from_string(course_id)
         course = get_course_by_id(course_key)
         query_features = list(configuration_helpers.get_value('student_profile_download_fields', [])) or [
             'id', 'username', 'name', 'email', 'language', 'location', 'gender', 'level_of_education',
             'mailing_address', 'goals', 'enrollment_mode', 'last_login', 'date_joined', 'external_user_key'
         ]
+        # Allow for sites to be able to define additional columns.
+        # Note that adding additional columns has the potential to break
+        # the student profile report due to a character limit on the
+        # asynchronous job input which in this case is a JSON string
+        # containing the list of columns to include in the report.
+        # TODO: Refactor the student profile report code to remove the list of columns
+        # that should be included in the report from the asynchronous job input.
+        # We need to clone the list because we modify it below
         keep_field_private(query_features, 'year_of_birth')
         query_features.append('enrollment_date')
         query_features_names = {
@@ -1422,8 +1490,10 @@ class GetStudentsFeatures(DeveloperErrorViewMixin, APIView):
             'enrollment_date': _('Enrollment Date')
         }
         if is_course_cohorted(course.id):
+            # Translators: 'Cohort' refers to a group of students within a course.
             query_features.append('cohort')
             query_features_names['cohort'] = _('Cohort')
+
         if course.teams_enabled:
             query_features.append('team')
             query_features_names['team'] = _('Team')
@@ -1502,6 +1572,12 @@ class GetStudentsWhoMayEnroll(DeveloperErrorViewMixin, APIView):
     @method_decorator(ensure_csrf_cookie)
     @method_decorator(transaction.non_atomic_requests)
     def post(self, request, course_id):
+        """
+        Initiate generation of a CSV file containing information about
+         students who may enroll in a course.
+        Responds with JSON
+            {"status": "... status message ..."}
+        """
         course_key = CourseKey.from_string(course_id)
 
         query_features = ['email']
@@ -2624,6 +2700,9 @@ def export_ora2_data(request, course_id):
 @require_course_permission(permissions.CAN_RESEARCH)
 @common_exceptions_400
 def export_ora2_summary(request, course_id):
+    """
+    Pushes a Celery task which will aggregate a summary students' progress in ora2 tasks for a course into a .csv
+    """
     course_key = CourseKey.from_string(course_id)
     report_type = _('ORA summary')
     submissions = Submission.objects.filter(course_id=course_key)
@@ -2641,6 +2720,10 @@ def export_ora2_summary(request, course_id):
 @require_course_permission(permissions.CAN_RESEARCH)
 @common_exceptions_400
 def export_ora2_submission_files(request, course_id):
+    """
+    Pushes a Celery task which will download and compress all submission
+    files (texts, attachments) into a zip archive.
+    """
     course_key = CourseKey.from_string(course_id)
 
     task_api.submit_export_ora2_submission_files(request, course_key)

@@ -100,7 +100,7 @@ def _flatten(iterable):
 class _CourseGradeReportContext:
     """
     Internal class that provides a common context to use for a single grade
-    report. When a report is parallelized across multiple processes,
+    report.  When a report is parallelized across multiple processes,
     elements of this context are serialized and parsed across process
     boundaries.
     """
@@ -190,12 +190,11 @@ class _CourseGradeReportContext:
 
 class _ProblemGradeReportContext:
     """
-    Internal class that provides a common context to use for a single problem
-    grade report.  When a report is parallelized across multiple processes,
+    Internal class that provides a common context to use for a single grade
+    report.  When a report is parallelized across multiple processes,
     elements of this context are serialized and parsed across process
     boundaries.
     """
-
     def __init__(self, _xblock_instance_args, _entry_id, course_id, _task_input, action_name):
         task_id = _xblock_instance_args.get('task_id') if _xblock_instance_args is not None else None
         self.task_info_string = (
@@ -224,22 +223,9 @@ class _ProblemGradeReportContext:
         return get_course_by_id(self.course_id)
 
     @lazy
-    def cohorts_enabled(self):
-        return is_course_cohorted(self.course_id)
-
-    @lazy
-    def course_experiments(self):
-        return get_split_user_partitions(self.course.user_partitions)
-
-    @lazy
-    def teams_enabled(self):
-        return self.course.teams_enabled
-
-    @lazy
     def graded_scorable_blocks_header(self):
         """
-        Returns an OrderedDict that maps a scorable block's id to its
-        headers in the final report.
+        Returns an OrderedDict that maps a scorable block's id to its headers in the final report.
         """
         scorable_blocks_map = OrderedDict()
         grading_context = grades_context.grading_context_for_course(self.course)
@@ -266,7 +252,6 @@ class _ProblemGradeReportContext:
     def update_status(self, message):
         """
         Updates the status on the celery task to the given message.
-        Also logs the update.
         """
         TASK_LOG.info('%s, Task type: %s, %s', self.task_info_string, self.action_name, message)
         return self.task_progress.update_task_state(extra_meta={'step': message})
@@ -447,19 +432,16 @@ class TemporaryFileReportMixin:
                 parent_dir=self.context.upload_parent_dir
             )
 
-
 class GradeReportBase:
     """
     Base class for grade reports (ProblemGradeReport and CourseGradeReport).
     """
-    USER_BATCH_SIZE = 100  # Defined for batching
-
     def __init__(self, context):
         self.context = context
 
     def _get_enrolled_learner_count(self):
         """
-        Returns count of number of learner enrolled in course.
+        Returns count of number of learners enrolled in course.
         """
         return CourseEnrollment.objects.users_enrolled_in(
             course_id=self.context.course_id,
@@ -484,17 +466,13 @@ class GradeReportBase:
 
     def _batch_users(self):
         """
-        Returns a generator of batches of users, respecting the provided enrolled_students.
+        Returns a generator of batches of users.
         """
-        def grouper(iterable, chunk_size=100, fillvalue=None):
-            args = [iter(iterable)] * chunk_size
-            return zip_longest(*args, fillvalue=fillvalue)
-
         if hasattr(self.context, 'enrolled_students') and self.context.enrolled_students is not None:
             # Use provided enrolled_students
             users = self.context.enrolled_students
         else:
-            # Fallback to querying enrolled learners
+            # Query enrolled learners, applying verified-only filter if needed
             filter_kwargs = {
                 'courseenrollment__course_id': self.context.course_id,
             }
@@ -502,20 +480,9 @@ class GradeReportBase:
                 filter_kwargs['courseenrollment__mode'] = CourseMode.VERIFIED
 
             excluded_ids = get_excluded_role_user_ids(self.context.course_id)
-            users = get_user_model().objects.filter(**filter_kwargs).exclude(id__in=excluded_ids).order_by('id')
+            users = get_user_model().objects.filter(**filter_kwargs).exclude(id__in=excluded_ids).order_by('id').select_related('profile')
 
-        user_chunks = grouper(users, chunk_size=self.USER_BATCH_SIZE)
-        for user_chunk in user_chunks:
-            user_chunk = [user for user in user_chunk if user is not None]
-            if user_chunk:
-                min_id = min(user.id for user in user_chunk)
-                max_id = max(user.id for user in user_chunk)
-                users = get_user_model().objects.filter(
-                    id__gte=min_id,
-                    id__lte=max_id,
-                    courseenrollment__course_id=self.context.course_id
-                ).select_related('profile')
-                yield users
+        yield users
 
     def log_additional_info_for_testing(self, message):
         """
@@ -530,6 +497,7 @@ class GradeReportBase:
         Override if a report type wants to clear caches after a batch of learners has
         been processed
         """
+        pass
 
     def _batched_rows(self):
         """
@@ -538,6 +506,7 @@ class GradeReportBase:
         for users in self._batch_users():
             yield self._rows_for_users(users)
             self._clear_caches()
+
 
 class CourseGradeReport(GradeReportBase):
     """
@@ -589,7 +558,7 @@ class CourseGradeReport(GradeReportBase):
         grades_header = ["Grade (Overall)"]
         for assignment_type, assignment_data in sorted(graded_assignments.items()):
             if assignment_data.get('separate_subsection_avg_headers', False):
-                graades_header.extend(assignment_data['subsection_headers'].values())  # One column per subsection
+                grades_header.extend(assignment_data['subsection_headers'].values())  # One column per subsection
             grades_header.append(assignment_data['average_header'])
         return grades_header
 
@@ -771,7 +740,7 @@ class ProblemGradeReport(GradeReportBase):
         """
         Public method to generate a grade report.
         """
-        with modulestore().bulk_operations(course_id):  # Fixed typo: withitejstore -> modulestore
+        with modulestore().bulk_operations(course_id):
             context = _ProblemGradeReportContext(_xblock_instance_args, _entry_id, course_id, _task_input, action_name)
             users = _task_input.get('users', [])
             # Filter out staff/instructors
@@ -795,11 +764,12 @@ class ProblemGradeReport(GradeReportBase):
         """
         Returns a list of all applicable column headers for this grade report.
         """
+        course = get_course_by_id(self.context.course_id)
         return (
             ["Student ID", "Email", "Username", "Full Name", "Grade"] +
             self._grades_header() +
-            [f'Experiment Group ({partition.name})' for partition in self.context.course_experiments] +
-            (['Team Name'] if self.context.teams_enabled else [])
+            [f'Experiment Group ({partition.name})' for partition in get_split_user_partitions(course.user_partitions)] +
+            (['Team Name'] if course.teams_enabled else [])
         )
 
     def _grades_header(self):
@@ -814,6 +784,8 @@ class ProblemGradeReport(GradeReportBase):
     def _error_headers(self):
         """
         Returns error headers for error report.
+        Returns:
+            list: error headers
         """
         return list(self._problem_grades_header().values()) + ['error_msg']
 
@@ -825,6 +797,7 @@ class ProblemGradeReport(GradeReportBase):
         """
         Returns a list of rows for the given users for this report.
         """
+        course = get_course_by_id(self.context.course_id)
         success_rows, error_rows = [], []
         for student, course_grade, error in CourseGradeFactory().iter(
             users,
@@ -858,8 +831,8 @@ class ProblemGradeReport(GradeReportBase):
             success_rows.append(
                 [student.id, student.email, student.username, student.get_full_name() or student.profile.name, course_grade.percent] +
                 _flatten(earned_possible_values) +
-                [''] * len(self.context.course_experiments) +
-                ([''] if self.context.teams_enabled else [])
+                [''] * len(get_split_user_partitions(course.user_partitions)) +
+                ([''] if course.teams_enabled else [])
             )
 
         return success_rows, error_rows
@@ -989,7 +962,8 @@ class ProblemResponses:
         store = modulestore()
         user_state_client = DjangoXBlockUserStateClient()
 
-        # Each user's generated report data may contain different fields
+        # Each user's generated report data may contain different fields, so we use an OrderedDict to prevent
+        # duplication of keys while preserving the order the XBlock provides the keys in.
         student_data_keys = OrderedDict()
 
         with store.bulk_operations(course_key):
@@ -999,7 +973,8 @@ class ProblemResponses:
                 course_blocks = get_course_blocks(user, usage_key)
                 base_path = cls._build_block_base_path(store.get_item(usage_key))
                 for title, path, block_key in cls._build_problem_list(course_blocks, usage_key):
-                    # Skip sequential and chapter blocks
+                    # Chapter and sequential blocks are filtered out since they include state
+                    # which isn't useful for this report.
                     if block_key.block_type in ('sequential', 'chapter'):
                         continue
 
@@ -1009,7 +984,8 @@ class ProblemResponses:
                     block = store.get_item(block_key)
                     generated_report_data = defaultdict(list)
 
-                    # Blocks can implement generate_report_data for custom formatting
+                    # Blocks can implement the generate_report_data method to provide their own
+                    # human-readable formatting for user state.
                     if hasattr(block, 'generate_report_data'):
                         try:
                             user_state_iterator = user_state_client.iter_all_for_block(block_key)
@@ -1027,6 +1003,9 @@ class ProblemResponses:
                         response['title'] = title
                         response['location'] = ' > '.join(base_path + path)
                         response['block_key'] = str(block_key)
+                        # A block that has a single state per user can contain multiple responses
+                        # within the same state.
+                        # Added by Mahendra
                         user = get_user_model().objects.get(username=response['username'])
                         response['Email'] = user.email
                         response['Full Name'] = user.get_full_name() or user.profile.name
@@ -1034,16 +1013,20 @@ class ProblemResponses:
                         response['Assessment Location'] = ' > '.join(base_path + path)
                         user_states = generated_report_data.get(response['username'])
                         if user_states:
+                            # For each response in the block, copy over the basic data like the
+                            # title, location, block_key and state, and add in the responses
                             for user_state in user_states:
                                 user_response = response.copy()
                                 user_response.update(user_state)
+
+                                # Respect the column order as returned by the xblock, if any.
                                 if isinstance(user_state, OrderedDict):
                                     user_state_keys = user_state.keys()
                                 else:
                                     user_state_keys = sorted(user_state.keys())
                                 for key in user_state_keys:
                                     student_data_keys[key] = 1
-                               # Added by Mahendra     
+                                # Added by Mahendra
                                 user_response["Question Text"] = user_state.get("Question", "")
                                 user_response["Student Response"] = user_state.get("Answer", "")
                                 user_response["Correct Response"] = user_state.get("Correct Answer", "")
@@ -1081,8 +1064,11 @@ class ProblemResponses:
                         max_count -= len(responses)
                         if max_count <= 0:
                             break
-
+        # Keep the keys in a useful order, starting with username, title and location,
+        # then the columns returned by the xblock report generator in sorted order and
+        # finally end with the more machine friendly block_key and state.
         student_data_keys_list = cls._success_headers()
+
         return student_data, student_data_keys_list
 
     @classmethod
@@ -1150,9 +1136,7 @@ class ProblemResponses:
 
     @staticmethod
     def _generate_upload_file_name(problem_locations, filters):
-        """
-        Generate a concise file name based on the report generation parameters.
-        """
+        """Generate a concise file name based on the report generation parameters."""
         multiple_problems = len(problem_locations) > 1
         csv_name = 'student_state'
         if multiple_problems:
