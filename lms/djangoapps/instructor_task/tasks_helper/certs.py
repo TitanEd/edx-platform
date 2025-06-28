@@ -16,6 +16,9 @@ from lms.djangoapps.certificates.api import (
     get_enrolled_allowlisted_users,
     get_enrolled_allowlisted_not_passing_users
 )
+from lms.djangoapps.instructor_task.tasks_helper.grades import get_excluded_role_user_ids  # Add this import
+from common.djangoapps.student.models import CourseEnrollment
+from common.djangoapps.student.models import CourseAccessRole
 from lms.djangoapps.certificates.data import CertificateStatuses
 
 from .runner import TaskProgress
@@ -28,20 +31,22 @@ log = logging.getLogger(__name__)
 def generate_students_certificates(
         _xblock_instance_args, _entry_id, course_id, task_input, action_name):
     """
-    For a given `course_id`, generate certificates for only students present in 'students' key in task_input
-    json column, otherwise generate certificates for all enrolled students.
+    For a given `course_id`, generate certificates for only non-staff/non-instructor students present in 'students' key
+    in task_input json column, otherwise generate certificates for all enrolled non-staff/non-instructor students.
     """
     start_time = time()
-    students_to_generate_certs_for = CourseEnrollment.objects.users_enrolled_in(course_id)
+    # Get enrolled students and exclude staff/instructors
+    excluded_ids = get_excluded_role_user_ids(course_id)
+    students_to_generate_certs_for = CourseEnrollment.objects.users_enrolled_in(course_id).exclude(id__in=excluded_ids)
 
     student_set = task_input.get('student_set')
     if student_set == 'all_allowlisted':
-        # Generate Certificates for all allowlisted students.
-        students_to_generate_certs_for = get_enrolled_allowlisted_users(course_id)
+        # Generate Certificates for all allowlisted non-staff/non-instructor students
+        students_to_generate_certs_for = get_enrolled_allowlisted_users(course_id).exclude(id__in=excluded_ids)
 
     elif student_set == 'allowlisted_not_generated':
-        # Allowlisted students who did not yet receive certificates
-        students_to_generate_certs_for = get_enrolled_allowlisted_not_passing_users(course_id)
+        # Allowlisted non-staff/non-instructor students who did not yet receive certificates
+        students_to_generate_certs_for = get_enrolled_allowlisted_not_passing_users(course_id).exclude(id__in=excluded_ids)
 
     elif student_set == "specific_student":
         specific_student_id = task_input.get('specific_student_id')
@@ -61,7 +66,7 @@ def generate_students_certificates(
             course_id, students_to_generate_certs_for, statuses_to_regenerate
         )
 
-    log.info(f'About to attempt certificate generation for {len(students_require_certs)} users in course {course_id}. '
+    log.info(f'About to attempt certificate generation for {len(students_require_certs)} non-staff/non-instructor users in course {course_id}. '
              f'The student_set is {student_set} and statuses_to_regenerate is {statuses_to_regenerate}')
 
     task_progress.skipped = task_progress.total - len(students_require_certs)

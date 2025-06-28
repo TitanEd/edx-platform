@@ -394,16 +394,26 @@ def submit_calculate_students_features_csv(request, course_key, features, **task
     return submit_task(request, task_type, task_class, course_key, task_input, task_key)
 
 
-def submit_calculate_may_enroll_csv(request, course_key, features):
+def submit_calculate_may_enroll_csv(request, course_key, features, excluded_ids=None):
     """
     Submits a task to generate a CSV file containing information about
     invited students who have not enrolled in a given course yet.
 
-    Raises AlreadyRunningError if said file is already being updated.
+    Args:
+        request: The HTTP request object.
+        course_key: The course key.
+        features: List of fields to include in the CSV (e.g., ['email']).
+        excluded_ids: Optional list or set of user IDs to exclude from the report.
+
+    Raises:
+        AlreadyRunningError if said file is already being updated.
     """
     task_type = InstructorTaskTypes.MAY_ENROLL_INFO_CSV
     task_class = calculate_may_enroll_csv
-    task_input = {'features': features}
+    task_input = {
+        'features': features,
+        'excluded_ids': list(excluded_ids) if excluded_ids else []
+    }
     task_key = ""
 
     return submit_task(request, task_type, task_class, course_key, task_input, task_key)

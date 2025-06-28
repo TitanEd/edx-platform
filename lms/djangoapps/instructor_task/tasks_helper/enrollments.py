@@ -2,7 +2,6 @@
 Instructor tasks related to enrollments.
 """
 
-
 import logging
 from datetime import datetime
 from time import time
@@ -10,9 +9,10 @@ from pytz import UTC
 from lms.djangoapps.instructor_analytics.basic import enrolled_students_features, list_may_enroll
 from lms.djangoapps.instructor_analytics.csvs import format_dictlist
 from common.djangoapps.student.models import CourseEnrollment  # lint-amnesty, pylint: disable=unused-import
+from lms.djangoapps.instructor_task.tasks_helper.grades import get_excluded_role_user_ids
 
 from .runner import TaskProgress
-from .utils import upload_csv_to_report_store  # lint-amnesty, pylint: disable=unused-import
+from .utils import upload_csv_to_report_store
 
 TASK_LOG = logging.getLogger('edx.celery.task')
 FILTERED_OUT_ROLES = ['staff', 'instructor', 'finance_admin', 'sales_admin']
@@ -58,7 +58,15 @@ def upload_students_csv(_xblock_instance_args, _entry_id, course_id, task_input,
     """
     start_time = time()
     start_date = datetime.now(UTC)
-    enrolled_students = CourseEnrollment.objects.users_enrolled_in(course_id)
+
+    # Exclude staff and instructors
+    excluded_ids = get_excluded_role_user_ids(course_id)
+    TASK_LOG.debug(f"Excluded staff/instructor user IDs: {excluded_ids}")
+
+    # Query enrolled students, excluding staff/instructors
+    enrolled_students = CourseEnrollment.objects.users_enrolled_in(course_id).exclude(id__in=excluded_ids)
+    TASK_LOG.debug(f"Students included in report (pre-features): {[student.username for student in enrolled_students]}")
+
     task_progress = TaskProgress(action_name, enrolled_students.count(), start_time)
 
     current_step = {'step': 'Calculating Profile Info'}
@@ -67,7 +75,16 @@ def upload_students_csv(_xblock_instance_args, _entry_id, course_id, task_input,
     # compute the student features table and format it
     query_features = task_input.get('features')
     student_data = enrolled_students_features(course_id, query_features)
-    header, rows = format_dictlist(student_data, query_features)
+
+    # Filter out staff/instructor users from student_data
+    filtered_student_data = [
+        data for data in student_data
+        if int(data.get('id')) not in excluded_ids
+    ]
+    TASK_LOG.debug(f"Filtered student data IDs: {[data.get('id') for data in filtered_student_data]}")
+
+    # Format the filtered data
+    header, rows = format_dictlist(filtered_student_data, query_features)
 
     task_progress.attempted = task_progress.succeeded = len(rows)
     task_progress.skipped = task_progress.total - task_progress.attempted

@@ -141,6 +141,14 @@ from .tools import (
     strip_if_string,
 )
 from .. import permissions
+from lms.djangoapps.instructor_task.tasks_helper.grades import get_excluded_role_user_ids
+from common.djangoapps.student.models import CourseEnrollment
+from opaque_keys.edx.keys import UsageKey, CourseKey
+from common.djangoapps.student.models import CourseAccessRole
+from lms.djangoapps.instructor.permissions import InstructorPermission, CAN_RESEARCH
+from openedx.core.djangoapps.course_groups.cohorts import get_cohort
+from lms.djangoapps.certificates.models import GeneratedCertificate
+from lms.djangoapps.instructor_analytics.csvs import create_csv_response
 
 log = logging.getLogger(__name__)
 
@@ -1185,7 +1193,6 @@ class ProblemResponseReportInitiate(DeveloperErrorViewMixin, APIView):
     Initiate generation of a CSV file containing all student answers
     to a given problem.
     """
-
     @apidocs.schema(
         parameters=[
             apidocs.path_parameter(
@@ -1211,9 +1218,7 @@ class ProblemResponseReportInitiate(DeveloperErrorViewMixin, APIView):
         """
         Initiate generation of a CSV file containing all student answers
         to a given problem.
-
         **Example requests**
-
             POST /api/instructor/v1/reports/{course_id}/generate/problem_responses {
                 "problem_locations": [
                     "{usage_key1}",
@@ -1225,11 +1230,8 @@ class ProblemResponseReportInitiate(DeveloperErrorViewMixin, APIView):
                 "problem_locations": ["{usage_key}"],
                 "problem_types_filter": ["problem"]
             }
-
         **POST Parameters**
-
         A POST request can include the following parameters:
-
         * problem_location: A list of usage keys for the blocks to include in
           the report. If the location is a block that contains other blocks,
           (such as the course, section, subsection, or unit blocks) then all
@@ -1237,12 +1239,9 @@ class ProblemResponseReportInitiate(DeveloperErrorViewMixin, APIView):
         * problem_types_filter: Optional. A comma-separated list of block types
           to include in the report. If set, only blocks of the specified types
           will be included in the report.
-
         To get data on all the poll and survey blocks in a course, you could
         POST the usage key of the course for `problem_location`, and
         "poll, survey" as the value for `problem_types_filter`.
-
-
         **Example Response:**
         If initiation is successful (or generation task is already running):
         ```json
@@ -1251,7 +1250,6 @@ class ProblemResponseReportInitiate(DeveloperErrorViewMixin, APIView):
             "task_id": "4e49522f-31d9-431a-9cff-dd2a2bf4c85a"
         }
         ```
-
         Responds with BadRequest if any of the provided problem locations are faulty.
         """
         params = ProblemResponseReportPostParamsSerializer(data=request.data)
@@ -1260,13 +1258,10 @@ class ProblemResponseReportInitiate(DeveloperErrorViewMixin, APIView):
         problem_types_filter = params.validated_data.get('problem_types_filter')
         if problem_types_filter:
             problem_types_filter = ','.join(problem_types_filter)
+        excluded_ids = get_excluded_role_user_ids(CourseKey.from_string(course_id))
         return _get_problem_responses(
-            request,
-            course_id=course_id,
-            problem_locations=problem_locations,
-            problem_types_filter=problem_types_filter,
+            request, course_id, problem_locations, problem_types_filter, excluded_ids=excluded_ids
         )
-
 
 @transaction.non_atomic_requests
 @require_POST
@@ -1375,7 +1370,6 @@ class GetGradingConfig(APIView):
         }
         return JsonResponse(response_payload)
 
-
 @transaction.non_atomic_requests
 @ensure_csrf_cookie
 @cache_control(no_cache=True, no_store=True, must_revalidate=True)
@@ -1387,27 +1381,55 @@ def get_issued_certificates(request, course_id):
         course_id
     Returns:
         {"certificates": [{course_id: xyz, mode: 'honor'}, ...]}
-
+    Respond with data on issued certificates for non-staff/non-instructor users, either as a table or CSV.
     """
     course_key = CourseKey.from_string(course_id)
     csv_required = request.GET.get('csv', 'false')
+    course = get_course_by_id(course_key)
+    course_name = course.display_name if course else str(course_key)
 
-    query_features = ['course_id', 'mode', 'total_issued_certificate', 'report_run_date']
+    query_features = ['course_name', 'full_name', 'username', 'email', 'certificate_issued_date', 'enrollment_date']
     query_features_names = [
-        ('course_id', _('CourseID')),
-        ('mode', _('Certificate Type')),
-        ('total_issued_certificate', _('Total Certificates Issued')),
-        ('report_run_date', _('Date Report Run'))
+        ('course_name', _('Course Name')),
+        ('full_name', _('User Full Name')),
+        ('username', _('Username')),
+        ('email', _('Email')),
+        ('certificate_issued_date', _('Certificate Issued Date')),
+        ('enrollment_date', _('Enrollment Date'))
     ]
-    certificates_data = instructor_analytics_basic.issued_certificates(course_key, query_features)
+    certificates = GeneratedCertificate.objects.filter(course_id=course_key).select_related('user')
+    excluded_ids = get_excluded_role_user_ids(course_key)
+    certificates = certificates.exclude(user_id__in=excluded_ids)
+
     if csv_required.lower() == 'true':
-        __, data_rows = instructor_analytics_csvs.format_dictlist(certificates_data, query_features)
-        return instructor_analytics_csvs.create_csv_response(
+        def iterator():
+            for cert in certificates:
+                enrollment = CourseEnrollment.objects.filter(user_id=cert.user_id, course_id=course_key).first()
+                yield [
+                    course_name,
+                    cert.user.get_full_name() or cert.user.profile.name,
+                    cert.user.username,
+                    cert.user.email,
+                    cert.created_date.strftime('%Y-%m-%d'),
+                    enrollment.created.strftime('%Y-%m-%d') if enrollment else ''
+                ]
+        return create_csv_response(
             'issued_certificates.csv',
             [col_header for __, col_header in query_features_names],
-            data_rows
+            iterator()
         )
     else:
+        certificates_data = [
+            {
+                'course_name': course_name,
+                'full_name': cert.user.get_full_name() or cert.user.profile.name,
+                'username': cert.user.username,
+                'email': cert.user.email,
+                'certificate_issued_date': cert.created_date.strftime('%Y-%m-%d'),
+                'enrollment_date': enrollment.created.strftime('%Y-%m-%d') if (enrollment := CourseEnrollment.objects.filter(user_id=cert.user_id, course_id=course_key).first()) else ''
+            }
+            for cert in certificates
+        ]
         response_payload = {
             'certificates': certificates_data,
             'queried_features': query_features,
@@ -1421,14 +1443,12 @@ def get_issued_certificates(request, course_id):
 class GetStudentsFeatures(DeveloperErrorViewMixin, APIView):
     """
     Respond with json which contains a summary of all enrolled students profile information.
-
     Responds with JSON
         {"students": [{-student-info-}, ...]}
-
     TO DO accept requests for different attribute sets.
     """
-    permission_classes = (IsAuthenticated, permissions.InstructorPermission)
-    permission_name = permissions.CAN_RESEARCH
+    permission_classes = (IsAuthenticated, InstructorPermission)
+    permission_name = CAN_RESEARCH
 
     @method_decorator(ensure_csrf_cookie)
     @method_decorator(transaction.non_atomic_requests)
@@ -1447,9 +1467,10 @@ class GetStudentsFeatures(DeveloperErrorViewMixin, APIView):
         """
         course_key = CourseKey.from_string(course_id)
         course = get_course_by_id(course_key)
-        report_type = _('enrolled learner profile')
-        available_features = instructor_analytics_basic.AVAILABLE_FEATURES
-
+        query_features = list(configuration_helpers.get_value('student_profile_download_fields', [])) or [
+            'id', 'username', 'name', 'email', 'language', 'location', 'gender', 'level_of_education',
+            'mailing_address', 'goals', 'enrollment_mode', 'last_login', 'date_joined', 'external_user_key'
+        ]
         # Allow for sites to be able to define additional columns.
         # Note that adding additional columns has the potential to break
         # the student profile report due to a character limit on the
@@ -1458,38 +1479,16 @@ class GetStudentsFeatures(DeveloperErrorViewMixin, APIView):
         # TODO: Refactor the student profile report code to remove the list of columns
         # that should be included in the report from the asynchronous job input.
         # We need to clone the list because we modify it below
-        query_features = list(configuration_helpers.get_value('student_profile_download_fields', []))
-
-        if not query_features:
-            query_features = [
-                'id', 'username', 'name', 'email', 'language', 'location',
-                'year_of_birth', 'gender', 'level_of_education', 'mailing_address',
-                'goals', 'enrollment_mode', 'last_login', 'date_joined', 'external_user_key'
-            ]
-        keep_field_private(query_features, 'year_of_birth')  # protected information
-
-        # Provide human-friendly and translatable names for these features. These names
-        # will be displayed in the table generated in data_download.js. It is not (yet)
-        # used as the header row in the CSV, but could be in the future.
+        keep_field_private(query_features, 'year_of_birth')
+        query_features.append('enrollment_date')
         query_features_names = {
-            'id': _('User ID'),
-            'username': _('Username'),
-            'name': _('Name'),
-            'email': _('Email'),
-            'language': _('Language'),
-            'location': _('Location'),
-            #  'year_of_birth': _('Birth Year'),  treated as privileged information as of TNL-10683,
-            #  not to go in reports
-            'gender': _('Gender'),
-            'level_of_education': _('Level of Education'),
-            'mailing_address': _('Mailing Address'),
-            'goals': _('Goals'),
-            'enrollment_mode': _('Enrollment Mode'),
-            'last_login': _('Last Login'),
-            'date_joined': _('Date Joined'),
-            'external_user_key': _('External User Key'),
+            'id': _('User ID'), 'username': _('Username'), 'name': _('Name'), 'email': _('Email'),
+            'language': _('Language'), 'location': _('Location'), 'gender': _('Gender'),
+            'level_of_education': _('Level of Education'), 'mailing_address': _('Mailing Address'),
+            'goals': _('Goals'), 'enrollment_mode': _('Enrollment Mode'), 'last_login': _('Last Login'),
+            'date_joined': _('Date Joined'), 'external_user_key': _('External User Key'),
+            'enrollment_date': _('Enrollment Date')
         }
-
         if is_course_cohorted(course.id):
             # Translators: 'Cohort' refers to a group of students within a course.
             query_features.append('cohort')
@@ -1498,44 +1497,74 @@ class GetStudentsFeatures(DeveloperErrorViewMixin, APIView):
         if course.teams_enabled:
             query_features.append('team')
             query_features_names['team'] = _('Team')
+        query_features.extend(['city', 'country'])
+        query_features_names.update({'city': _('City'), 'country': _('Country')})
 
-        # For compatibility reasons, city and country should always appear last.
-        query_features.append('city')
-        query_features_names['city'] = _('City')
-        query_features.append('country')
-        query_features_names['country'] = _('Country')
+        excluded_ids = get_excluded_role_user_ids(course_key)
+        enrolled_students = CourseEnrollment.objects.users_enrolled_in(course_key).exclude(id__in=excluded_ids)
 
         if not csv:
-            student_data = instructor_analytics_basic.enrolled_students_features(course_key, query_features)
+            student_data = []
+            for user in enrolled_students:
+                profile = UserProfile.objects.filter(user=user).first()
+                features = {
+                    'id': str(user.id),
+                    'username': user.username,
+                    'name': profile.name if profile else '',
+                    'email': user.email,
+                    'language': profile.language if profile else '',
+                    'location': profile.location if profile else '',
+                    'gender': profile.gender if profile else '',
+                    'level_of_education': profile.level_of_education if profile else '',
+                    'mailing_address': profile.mailing_address if profile else '',
+                    'goals': profile.goals if profile else '',
+                    'enrollment_mode': CourseEnrollment.objects.get(user=user, course_id=course_key).mode,
+                    'last_login': user.last_login.strftime('%Y-%m-%d %H:%M:%S') if user.last_login else '',
+                    'date_joined': user.date_joined.strftime('%Y-%m-%d %H:%M:%S'),
+                    'external_user_key': user.id,
+                    'city': profile.city if profile else '',
+                    'country': profile.country.code if profile and profile.country else ''
+                }
+                if 'cohort' in query_features:
+                    cohort = get_cohort(user, course_key)
+                    features['cohort'] = cohort.name if cohort else ''
+                if 'team' in query_features:
+                    team = CourseTeamMembership.objects.filter(user=user, team__course_id=course_key).first()
+                    features['team'] = team.team.name if team else ''
+                student_data.append({
+                    **features,
+                    'enrollment_date': CourseEnrollment.objects.get(user=user, course_id=course_key).created.strftime('%Y-%m-%d %H:%M:%S')
+                })
+
+            filtered_student_data = [data for data in student_data if int(data.get('id', 0)) not in excluded_ids]
             response_payload = {
                 'course_id': str(course_key),
-                'students': student_data,
-                'students_count': len(student_data),
+                'students': filtered_student_data,
+                'students_count': len(filtered_student_data),
                 'queried_features': query_features,
                 'feature_names': query_features_names,
-                'available_features': available_features,
+                'available_features': query_features
             }
-            return JsonResponse(response_payload)
-
+            return Response(response_payload, status=status.HTTP_200_OK)
         else:
             try:
-                task_api.submit_calculate_students_features_csv(
-                    request,
-                    course_key,
-                    query_features
-                )
-                success_status = SUCCESS_MESSAGE_TEMPLATE.format(report_type=report_type)
+                task = task_api.submit_calculate_students_features_csv(request, course_key, query_features)
+                return Response({
+                    'message': SUCCESS_MESSAGE_TEMPLATE.format(report_type=_('enrolled learner profile')),
+                    'task_id': task.task_id,
+                }, status=status.HTTP_200_OK)
             except Exception as e:
                 raise self.api_error(status.HTTP_400_BAD_REQUEST, str(e), 'Requested task is already running')
-
-            return JsonResponse({"status": success_status})
-
 
 @method_decorator(cache_control(no_cache=True, no_store=True, must_revalidate=True), name='dispatch')
 @method_decorator(transaction.non_atomic_requests, name='dispatch')
 class GetStudentsWhoMayEnroll(DeveloperErrorViewMixin, APIView):
     """
     Initiate generation of a CSV file containing information about
+    students who may enroll in a course.
+
+    Responds with JSON
+        {"status": "... status message ..."}
     """
     permission_classes = (IsAuthenticated, permissions.InstructorPermission)
     permission_name = permissions.CAN_RESEARCH
@@ -1546,19 +1575,16 @@ class GetStudentsWhoMayEnroll(DeveloperErrorViewMixin, APIView):
         """
         Initiate generation of a CSV file containing information about
          students who may enroll in a course.
-
         Responds with JSON
             {"status": "... status message ..."}
         """
         course_key = CourseKey.from_string(course_id)
+
         query_features = ['email']
         report_type = _('enrollment')
-        try:
-            task_api.submit_calculate_may_enroll_csv(request, course_key, query_features)
-            success_status = SUCCESS_MESSAGE_TEMPLATE.format(report_type=report_type)
-        except Exception as e:
-            raise self.api_error(status.HTTP_400_BAD_REQUEST, str(e), 'Requested task is already running')
-
+        excluded_ids = get_excluded_role_user_ids(course_key)
+        task_api.submit_calculate_may_enroll_csv(request, course_key, query_features, excluded_ids=excluded_ids)
+        success_status = SUCCESS_MESSAGE_TEMPLATE.format(report_type=report_type)
         return JsonResponse({"status": success_status})
 
     def get(self, request, *args, **kwargs):
@@ -2657,14 +2683,13 @@ def list_financial_report_downloads(_request, course_id):
 @require_course_permission(permissions.CAN_RESEARCH)
 @common_exceptions_400
 def export_ora2_data(request, course_id):
-    """
-    Pushes a Celery task which will aggregate ora2 responses for a course into a .csv
-    """
     course_key = CourseKey.from_string(course_id)
     report_type = _('ORA data')
-    task_api.submit_export_ora2_data(request, course_key)
+    submissions = Submission.objects.filter(course_id=course_key)
+    excluded_ids = get_excluded_role_user_ids(course_key)
+    submissions = submissions.exclude(student_id__in=excluded_ids)
+    task_api.submit_export_ora2_data(request, course_key, submissions=submissions)
     success_status = SUCCESS_MESSAGE_TEMPLATE.format(report_type=report_type)
-
     return JsonResponse({"status": success_status})
 
 
@@ -2680,9 +2705,11 @@ def export_ora2_summary(request, course_id):
     """
     course_key = CourseKey.from_string(course_id)
     report_type = _('ORA summary')
-    task_api.submit_export_ora2_summary(request, course_key)
+    submissions = Submission.objects.filter(course_id=course_key)
+    excluded_ids = get_excluded_role_user_ids(course_key)
+    submissions = submissions.exclude(student_id__in=excluded_ids)
+    task_api.submit_export_ora2_summary(request, course_key, submissions=submissions)
     success_status = SUCCESS_MESSAGE_TEMPLATE.format(report_type=report_type)
-
     return JsonResponse({"status": success_status})
 
 
@@ -2716,13 +2743,24 @@ def export_ora2_submission_files(request, course_id):
 @common_exceptions_400
 def calculate_grades_csv(request, course_id):
     """
-    AlreadyRunningError is raised if the course's grades are already being updated.
+    Initiate generation of a CSV grade report for enrolled students, excluding staff and instructors.
     """
-    report_type = _('grade')
     course_key = CourseKey.from_string(course_id)
-    task_api.submit_calculate_grades_csv(request, course_key)
-    success_status = SUCCESS_MESSAGE_TEMPLATE.format(report_type=report_type)
+    report_type = _('grade')
 
+    # Get user IDs with staff or instructor roles
+    excluded_ids = get_excluded_role_user_ids(course_key)
+    log.info(f"Course {course_key}: Excluded user IDs (staff/instructor): {excluded_ids}")
+
+    # Fetch enrolled students, excluding staff/instructors
+    enrolled_students = CourseEnrollment.objects.users_enrolled_in(course_key)
+    log.info(f"Course {course_key}: Total enrolled students before exclusion: {enrolled_students.count()}")
+    enrolled_students = enrolled_students.exclude(id__in=excluded_ids)
+    log.info(f"Course {course_key}: Number of enrolled students after exclusion: {enrolled_students.count()}")
+
+    # Pass student IDs to the task
+    task_api.submit_calculate_grades_csv(request, course_key, user_ids=[user.id for user in enrolled_students])
+    success_status = SUCCESS_MESSAGE_TEMPLATE.format(report_type=report_type)
     return JsonResponse({"status": success_status})
 
 
@@ -2730,7 +2768,7 @@ def calculate_grades_csv(request, course_id):
 @require_POST
 @ensure_csrf_cookie
 @cache_control(no_cache=True, no_store=True, must_revalidate=True)
-@require_course_permission(permissions.CAN_RESEARCH)
+@require_course_permission(CAN_RESEARCH)
 @common_exceptions_400
 def problem_grade_report(request, course_id):
     """
@@ -2742,10 +2780,16 @@ def problem_grade_report(request, course_id):
     """
     course_key = CourseKey.from_string(course_id)
     report_type = _('problem grade')
-    task_api.submit_problem_grade_report(request, course_key)
-    success_status = SUCCESS_MESSAGE_TEMPLATE.format(report_type=report_type)
+    excluded_ids = get_excluded_role_user_ids(course_key)
+    enrolled_students = CourseEnrollment.objects.users_enrolled_in(course_key).exclude(id__in=excluded_ids)
+    student_ids = [user.id for user in enrolled_students]
 
-    return JsonResponse({"status": success_status})
+    try:
+        task = task_api.submit_problem_grade_report(request, course_key, student_ids=student_ids)
+        success_status = SUCCESS_MESSAGE_TEMPLATE.format(report_type=report_type)
+        return JsonResponse({"status": success_status, "task_id": task.task_id})
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 
 @require_POST

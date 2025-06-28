@@ -4,6 +4,7 @@ Functionality for generating grade reports.
 
 import csv
 import logging
+import pytz
 import re
 import json
 from collections import OrderedDict, defaultdict
@@ -53,12 +54,33 @@ from .runner import TaskProgress
 from .utils import upload_csv_to_report_store, upload_csv_file_to_report_store
 from django.utils.translation import gettext as _
 
+from opaque_keys.edx.keys import UsageKey, CourseKey
+from common.djangoapps.student.models import CourseAccessRole
+from openedx.core.djangoapps.course_groups.cohorts import get_cohort_names, is_course_cohorted
+from xmodule.split_test_block import get_split_user_partitions
 TASK_LOG = logging.getLogger('edx.celery.task')
 
 ENROLLED_IN_COURSE = 'enrolled'
 
 NOT_ENROLLED_IN_COURSE = 'unenrolled'
 
+
+def get_excluded_role_user_ids(course_key: CourseKey) -> set: #Added By TitanEd
+    """
+    Retrieve a set of user IDs with 'staff' or 'instructor' roles for the given course.
+
+    Args:
+        course_key (CourseKey): The course identifier.
+
+    Returns:
+        set: A set of user IDs with 'staff' or 'instructor' roles.
+    """
+    return set(
+        CourseAccessRole.objects.filter(
+            course_id=course_key,
+            role__in=['staff', 'instructor']
+        ).values_list('user_id', flat=True)
+    )
 
 def _user_enrollment_status(user, course_id):
     """
@@ -82,8 +104,7 @@ class _CourseGradeReportContext:
     elements of this context are serialized and parsed across process
     boundaries.
     """
-
-    def __init__(self, _xblock_instance_args, _entry_id, course_id, _task_input, action_name):
+    def __init__(self, _xblock_instance_args, _entry_id, course_id, _task_input, action_name, enrolled_students=None):
         self.task_info_string = (
             'Task: {task_id}, '
             'InstructorTask ID: {entry_id}, '
@@ -101,6 +122,7 @@ class _CourseGradeReportContext:
         self.report_for_verified_only = course_grade_report_verified_only(self.course_id)
         self.upload_parent_dir = _task_input.get('upload_parent_dir', '')
         self.upload_filename = _task_input.get('filename', 'grade_report')
+        self.enrolled_students = enrolled_students  # Store filtered students
 
     @lazy
     def course(self):
@@ -168,12 +190,11 @@ class _CourseGradeReportContext:
 
 class _ProblemGradeReportContext:
     """
-    Internal class that provides a common context to use for a single problem
-    grade report.  When a report is parallelized across multiple processes,
+    Internal class that provides a common context to use for a single grade
+    report.  When a report is parallelized across multiple processes,
     elements of this context are serialized and parsed across process
     boundaries.
     """
-
     def __init__(self, _xblock_instance_args, _entry_id, course_id, _task_input, action_name):
         task_id = _xblock_instance_args.get('task_id') if _xblock_instance_args is not None else None
         self.task_info_string = (
@@ -204,8 +225,7 @@ class _ProblemGradeReportContext:
     @lazy
     def graded_scorable_blocks_header(self):
         """
-        Returns an OrderedDict that maps a scorable block's id to its
-        headers in the final report.
+        Returns an OrderedDict that maps a scorable block's id to its headers in the final report.
         """
         scorable_blocks_map = OrderedDict()
         grading_context = grades_context.grading_context_for_course(self.course)
@@ -232,7 +252,6 @@ class _ProblemGradeReportContext:
     def update_status(self, message):
         """
         Updates the status on the celery task to the given message.
-        Also logs the update.
         """
         TASK_LOG.info('%s, Task type: %s, %s', self.task_info_string, self.action_name, message)
         return self.task_progress.update_task_state(extra_meta={'step': message})
@@ -413,7 +432,6 @@ class TemporaryFileReportMixin:
                 parent_dir=self.context.upload_parent_dir
             )
 
-
 class GradeReportBase:
     """
     Base class for grade reports (ProblemGradeReport and CourseGradeReport).
@@ -423,7 +441,7 @@ class GradeReportBase:
 
     def _get_enrolled_learner_count(self):
         """
-        Returns count of number of learner enrolled in course.
+        Returns count of number of learners enrolled in course.
         """
         return CourseEnrollment.objects.users_enrolled_in(
             course_id=self.context.course_id,
@@ -450,40 +468,21 @@ class GradeReportBase:
         """
         Returns a generator of batches of users.
         """
-        def grouper(iterable, chunk_size=100, fillvalue=None):
-            args = [iter(iterable)] * chunk_size
-            return zip_longest(*args, fillvalue=fillvalue)
-
-        def get_enrolled_learners_for_course(course_id, verified_only=False):
-            """
-            Get all the enrolled users in a course chunk by chunk.
-            This generator method fetches & loads the enrolled user objects on demand which in chunk
-            size defined. This method is a workaround to avoid out-of-memory errors.
-            """
+        if hasattr(self.context, 'enrolled_students') and self.context.enrolled_students is not None:
+            # Use provided enrolled_students
+            users = self.context.enrolled_students
+        else:
+            # Query enrolled learners, applying verified-only filter if needed
             filter_kwargs = {
-                'courseenrollment__course_id': course_id,
+                'courseenrollment__course_id': self.context.course_id,
             }
-            if verified_only:
+            if self.context.report_for_verified_only:
                 filter_kwargs['courseenrollment__mode'] = CourseMode.VERIFIED
 
-            user_ids_list = get_user_model().objects.filter(**filter_kwargs).values_list('id', flat=True).order_by('id')
-            user_chunks = grouper(user_ids_list)
-            for user_ids in user_chunks:
-                user_ids = [user_id for user_id in user_ids if user_id is not None]
-                min_id = min(user_ids)
-                max_id = max(user_ids)
-                users = get_user_model().objects.filter(
-                    id__gte=min_id,
-                    id__lte=max_id,
-                    **filter_kwargs
-                ).select_related('profile')
+            excluded_ids = get_excluded_role_user_ids(self.context.course_id)
+            users = get_user_model().objects.filter(**filter_kwargs).exclude(id__in=excluded_ids).order_by('id').select_related('profile')
 
-                yield users
-
-        return get_enrolled_learners_for_course(
-            course_id=self.context.course_id,
-            verified_only=self.context.report_for_verified_only
-        )
+        yield users
 
     def log_additional_info_for_testing(self, message):
         """
@@ -491,13 +490,14 @@ class GradeReportBase:
 
         TODO -- Remove as a part of PROD-1287
         """
-        self.context.update_status(message)
+        self.context.update_status('')
 
     def _clear_caches(self):
         """
         Override if a report type wants to clear caches after a batch of learners has
         been processed
         """
+        pass
 
     def _batched_rows(self):
         """
@@ -510,18 +510,19 @@ class GradeReportBase:
 
 class CourseGradeReport(GradeReportBase):
     """
-    Class to encapsulate functionality related to generating user/row had header data for Corse Grade Reports.
+    Class to encapsulate functionality related to generating user/row had header data for Course Grade Reports.
     """
     # Batch size for chunking the list of enrollees in the course.
     USER_BATCH_SIZE = 100
 
     @classmethod
-    def generate(cls, _xblock_instance_args, _entry_id, course_id, _task_input, action_name):
+    def generate(cls, _xblock_instance_args, _entry_id, course_id, _task_input, action_name, enrolled_students=None):
         """
-        Public method to generate a grade report.
+        Public method to generate a grade report for specified students in a course.
         """
         with modulestore().bulk_operations(course_id):
-            context = _CourseGradeReportContext(_xblock_instance_args, _entry_id, course_id, _task_input, action_name)
+            context = _CourseGradeReportContext(_xblock_instance_args, _entry_id, course_id, _task_input, action_name, enrolled_students=enrolled_students)
+            TASK_LOG.info(f"Generating grade report for {enrolled_students.count() if enrolled_students else 0} students in course {course_id}")
             if use_on_disk_grade_reporting(course_id):  # AU-926
                 return TempFileCourseGradeReport(context)._generate()  # pylint: disable=protected-access
             else:
@@ -730,12 +731,10 @@ class InMemoryCourseGradeReport(CourseGradeReport, InMemoryReportMixin):
 class TempFileCourseGradeReport(CourseGradeReport, TemporaryFileReportMixin):
     """ Course Grade Report that writes file iteratively to a TempFile to then be uploaded """
 
-
 class ProblemGradeReport(GradeReportBase):
     """
-    Class to encapsulate functionality related to generating user/row had header data for Problem Grade Reports.
+    Class to encapsulate functionality related to generating user/row and header data for Problem Grade Reports.
     """
-
     @classmethod
     def generate(cls, _xblock_instance_args, _entry_id, course_id, _task_input, action_name):
         """
@@ -743,25 +742,44 @@ class ProblemGradeReport(GradeReportBase):
         """
         with modulestore().bulk_operations(course_id):
             context = _ProblemGradeReportContext(_xblock_instance_args, _entry_id, course_id, _task_input, action_name)
+            users = _task_input.get('users', [])
+            # Filter out staff/instructors
+            excluded_ids = get_excluded_role_user_ids(course_id)
+            users = [user for user in users if user.id not in excluded_ids]
+            # Apply verified-only filter if waffle flag is enabled
+            if problem_grade_report_verified_only(course_id):
+                verified_users = CourseEnrollment.objects.filter(
+                    course_id=course_id,
+                    mode='verified',
+                    user_id__in=[user.id for user in users]
+                ).values_list('user_id', flat=True)
+                users = [user for user in users if user.id in verified_users]
+            _task_input['users'] = users
             if use_on_disk_grade_reporting(course_id):  # AU-926
-                return TempFileProblemGradeReport(context)._generate()  # pylint: disable=protected-access
+                return TempFileProblemGradeReport(context)._generate()
             else:
-                return InMemoryProblemGradeReport(context)._generate()  # pylint: disable=protected-access
+                return InMemoryProblemGradeReport(context)._generate()
 
     def _success_headers(self):
         """
         Returns a list of all applicable column headers for this grade report.
         """
+        course = get_course_by_id(self.context.course_id)
         return (
-            ["Student ID", "Email", "Username", "Full Name"] +
+            ["Student ID", "Email", "Username", "Full Name", "Grade"] +
             self._grades_header() +
-            (['Cohort Name'] if self.context.cohorts_enabled else []) +
-            [f'Experiment Group ({partition.name})' for partition in self.context.course_experiments] +
-            (['Team Name'] if self.context.teams_enabled else []) +
-            ['Enrollment Track', 'Verification Status'] +
-            ['Certificate Eligible', 'Certificate Delivered', 'Certificate Type'] +
-            ['Enrollment Status']
-    )
+            [f'Experiment Group ({partition.name})' for partition in get_split_user_partitions(course.user_partitions)] +
+            (['Team Name'] if course.teams_enabled else [])
+        )
+
+    def _grades_header(self):
+        """
+        Returns the header fields associated with grades for this report.
+        """
+        headers = []
+        for block_location, header_pair in self.context.graded_scorable_blocks_header.items():
+            headers.extend(header_pair)
+        return headers
 
     def _error_headers(self):
         """
@@ -773,12 +791,13 @@ class ProblemGradeReport(GradeReportBase):
 
     def _problem_grades_header(self):
         """Problem Grade report header."""
-        return OrderedDict([('id', 'Student ID'), ('email', 'Email'), ('username', 'Username'), ('full_name', 'Full Name')])   #Added full name by Mahendra
+        return OrderedDict([('id', 'Student ID'), ('email', 'Email'), ('username', 'Username'), ('full_name', 'Full Name')])
 
     def _rows_for_users(self, users):
         """
         Returns a list of rows for the given users for this report.
         """
+        course = get_course_by_id(self.context.course_id)
         success_rows, error_rows = [], []
         for student, course_grade, error in CourseGradeFactory().iter(
             users,
@@ -788,7 +807,6 @@ class ProblemGradeReport(GradeReportBase):
         ):
             if not course_grade:
                 err_msg = str(error)
-                # There was an error grading this student.
                 if not err_msg:
                     err_msg = 'Unknown error'
                 error_rows.append(
@@ -811,9 +829,10 @@ class ProblemGradeReport(GradeReportBase):
 
             enrollment_status = _user_enrollment_status(student, self.context.course_id)
             success_rows.append(
-                [student.id, student.email, student.username, student.get_full_name() or student.profile.name] +    #Added full name by Mahendra
-                [enrollment_status, course_grade.percent] +
-                _flatten(earned_possible_values)
+                [student.id, student.email, student.username, student.get_full_name() or student.profile.name, course_grade.percent] +
+                _flatten(earned_possible_values) +
+                [''] * len(get_split_user_partitions(course.user_partitions)) +
+                ([''] if course.teams_enabled else [])
             )
 
         return success_rows, error_rows
@@ -822,26 +841,22 @@ class ProblemGradeReport(GradeReportBase):
         get_cache('get_enrollment').clear()
         get_cache(CourseEnrollment.MODE_CACHE_NAMESPACE).clear()
 
-
 class InMemoryProblemGradeReport(ProblemGradeReport, InMemoryReportMixin):
-    """ Program Grade Report that compiles and then uploads all rows at once """
-
+    """ Problem Grade Report that compiles and then uploads all rows at once """
 
 class TempFileProblemGradeReport(ProblemGradeReport, TemporaryFileReportMixin):
-    """ Program Grade Report that writes file iteratively to a TempFile to then be uploaded """
-
+    """ Problem Grade Report that writes file iteratively to a TempFile to then be uploaded """
 
 class ProblemResponses:
     """
     Class to encapsulate functionality related to generating Problem Responses Reports.
     """
-
     @staticmethod
     def _build_block_base_path(block):
         """
         Return the display names of the blocks that lie above the supplied block in hierarchy.
 
-        Arguments:
+        Args:
             block: a single block
 
         Returns:
@@ -854,11 +869,10 @@ class ProblemResponses:
         return list(reversed(path))
 
     @classmethod
-    def _success_headers(cls):   #Added by Mahendra
+    def _success_headers(cls):
         """
         Returns a list of all applicable column headers for this grade report.
         """
-        # Added full name by Mahendra
         return [
             "Email",
             "Full Name",
@@ -874,17 +888,18 @@ class ProblemResponses:
             "Submission History",
         ]
 
-
     @classmethod
     def _build_problem_list(cls, course_blocks, root, path=None):
         """
         Generate a tuple of display names, block location paths and block keys
         for all problem blocks under the ``root`` block.
-        Arguments:
+
+        Args:
             course_blocks (BlockStructureBlockData): Block structure for a course.
             root (UsageKey): This block and its children will be used to generate
                 the problem list
             path (List[str]): The list of display names for the parent of root block
+
         Yields:
             Tuple[str, List[str], UsageKey]: tuple of a block's display name, path, and
                 usage key
@@ -901,12 +916,13 @@ class ProblemResponses:
 
     @classmethod
     def _build_student_data(
-        cls, user_id, course_key, usage_key_str_list, filter_types=None,
+        cls, user_id, course_key, usage_key_str_list, filter_types=None, enrolled_students=None
     ):
         """
         Generate a list of problem responses for all problem under the
         ``problem_location`` root.
-        Arguments:
+
+        Args:
             user_id (int): The user id for the user generating the report
             course_key (CourseKey): The ``CourseKey`` for the course whose report
                 is being generated
@@ -914,8 +930,11 @@ class ProblemResponses:
                 blocks and their child blocks.
             filter_types (List[str]): The report generator will only include data for
                 block types in this list.
+            enrolled_students (QuerySet): Optional filtered queryset of enrolled students,
+                excluding staff/instructors.
+
         Returns:
-              Tuple[List[Dict], List[str]]: Returns a list of dictionaries
+            Tuple[List[Dict], List[str]]: Returns a list of dictionaries
                 containing the student data which will be included in the
                 final csv, and the features/keys to include in that CSV.
         """
@@ -924,6 +943,18 @@ class ProblemResponses:
             for usage_key_str in usage_key_str_list
         ]
         user = get_user_model().objects.get(pk=user_id)
+
+        # Use enrolled_students if provided, else query enrolled users excluding staff/instructors
+        if enrolled_students is not None:
+            students = enrolled_students
+        else:
+            filter_kwargs = {
+                'courseenrollment__course_id': course_key,
+            }
+            if problem_grade_report_verified_only(course_key):
+                filter_kwargs['courseenrollment__mode'] = CourseMode.VERIFIED
+            excluded_ids = get_excluded_role_user_ids(course_key)
+            students = get_user_model().objects.filter(**filter_kwargs).exclude(id__in=excluded_ids)
 
         student_data = []
         max_count = settings.FEATURES.get('MAX_PROBLEM_RESPONSES_COUNT')
@@ -936,7 +967,7 @@ class ProblemResponses:
         student_data_keys = OrderedDict()
 
         with store.bulk_operations(course_key):
-            for usage_key in usage_keys:  # lint-amnesty, pylint: disable=too-many-nested-blocks
+            for usage_key in usage_keys:
                 if max_count is not None and max_count <= 0:
                     break
                 course_blocks = get_course_blocks(user, usage_key)
@@ -964,12 +995,13 @@ class ProblemResponses:
                             pass
 
                     responses = []
-
                     for response in list_problem_responses(course_key, block_key, max_count):
+                        # Filter responses to only include those from enrolled_students
+                        if not students.filter(username=response['username']).exists():
+                            continue
+
                         response['title'] = title
-                        # A human-readable location for the current block
                         response['location'] = ' > '.join(base_path + path)
-                        # A machine-friendly location for the current block
                         response['block_key'] = str(block_key)
                         # A block that has a single state per user can contain multiple responses
                         # within the same state.
@@ -1004,20 +1036,20 @@ class ProblemResponses:
                                 formatted_time = (
                                     timezone.make_aware(
                                         datetime.strptime(
-                                            response_state.get(
-                                                "last_submission_time", ""
-                                            ),
+                                            response_state.get("last_submission_time", ""),
                                             "%Y-%m-%dT%H:%M:%SZ",
                                         ),
                                         timezone.utc,
                                     )
                                     .astimezone(timezone.get_current_timezone())
                                     .strftime("%b %d, %Y, %I:%M %p")
+                                    if response_state.get("last_submission_time")
+                                    else ""
                                 )
-                                user_response["Last Submission Date & Time"] = (formatted_time)
-                                user_response["Attempts Used"] = response_state.get("attempts")
+                                user_response["Last Submission Date & Time"] = formatted_time
+                                user_response["Attempts Used"] = response_state.get("attempts", 0)
                                 submission_history = []
-                                for i, score in enumerate(response_state.get("score_history", list()), 1):
+                                for i, score in enumerate(response_state.get("score_history", []), 1):
                                     earned = score.get("raw_earned", 0)
                                     possible = score.get("raw_possible", 0)
                                     submission_history.append(f"Attempt {i}: {earned}/{possible}")
@@ -1032,7 +1064,6 @@ class ProblemResponses:
                         max_count -= len(responses)
                         if max_count <= 0:
                             break
-
         # Keep the keys in a useful order, starting with username, title and location,
         # then the columns returned by the xblock report generator in sorted order and
         # finally end with the more machine friendly block_key and state.
@@ -1041,13 +1072,24 @@ class ProblemResponses:
         return student_data, student_data_keys_list
 
     @classmethod
-    def generate(cls, _xblock_instance_args, _entry_id, course_id, task_input, action_name):
+    def generate(cls, _xblock_instance_args, _entry_id, course_id, task_input, action_name, enrolled_students=None):
         """
         For a given `course_id`, generate a CSV file containing
         all student answers to a given problem, and store using a `ReportStore`.
+
+        Args:
+            _xblock_instance_args: Arguments for the XBlock instance.
+            _entry_id: Instructor task ID.
+            course_id (CourseKey): The course identifier.
+            task_input (dict): Task input parameters, including problem_locations and user_id.
+            action_name (str): Name of the action.
+            enrolled_students (QuerySet): Optional filtered queryset of enrolled students.
+
+        Returns:
+            TaskProgress: Updated task progress with report details.
         """
         start_time = time()
-        start_date = datetime.now(UTC)
+        start_date = datetime.now(pytz.UTC)
         num_reports = 1
         task_progress = TaskProgress(action_name, num_reports, start_time)
         current_step = {'step': 'Calculating students answers to problem'}
@@ -1065,6 +1107,7 @@ class ProblemResponses:
             course_key=course_id,
             usage_key_str_list=problem_locations,
             filter_types=filter_types,
+            enrolled_students=enrolled_students,
         )
 
         for data in student_data:
