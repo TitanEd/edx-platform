@@ -38,6 +38,10 @@ from opaque_keys.edx.keys import CourseKey
 from pytz import UTC
 from rest_framework.decorators import api_view, authentication_classes, permission_classes
 from rest_framework.permissions import IsAuthenticated
+from access_subscriptions.models import UserSubscription, Subscription
+from datetime import datetime
+import json
+import pytz
 
 from common.djangoapps.student.toggles import should_redirect_to_courseware_after_enrollment
 from common.djangoapps.track import views as track_views
@@ -352,7 +356,6 @@ def change_enrollment(request, check_access=True):
 
     Returns:
         Response
-
     """
     # Get the user
     user = request.user
@@ -364,7 +367,7 @@ def change_enrollment(request, check_access=True):
     # Ensure we received a course_id
     action = request.POST.get("enrollment_action")
     if 'course_id' not in request.POST:
-        return HttpResponseBadRequest(_("Course id not specified"))
+        return HttpResponseBadRequest(json.dumps({"error": _("Course id not specified")}), content_type="application/json")
 
     try:
         course_id = CourseKey.from_string(request.POST.get("course_id"))
@@ -375,22 +378,47 @@ def change_enrollment(request, check_access=True):
             action,
             request.POST.get("course_id"),
         )
-        return HttpResponseBadRequest(_("Invalid course id"))
+        return HttpResponseBadRequest(json.dumps({"error": _("Invalid course id")}), content_type="application/json")
 
     # Allow us to monitor performance of this transaction on a per-course basis since we often roll-out features
     # on a per-course basis.
     monitoring_utils.set_custom_attribute('course_id', str(course_id))
 
     if action == "enroll":
+        # Exempt superusers and staff from subscription checks
+        if user.is_superuser or user.is_staff:
+            try:
+                CourseEnrollment.enroll(user, course_id, check_access=check_access, mode='honor')
+            except Exception as e:
+                return HttpResponseBadRequest(json.dumps({"error": str(e)}), content_type="application/json")
+            return HttpResponse(reverse('dashboard'), status=200)
+
         # Make sure the course exists
-        # We don't do this check on unenroll, or a bad course id can't be unenrolled from
         if not modulestore().has_course(course_id):
             log.warning(
                 "User %s tried to enroll in non-existent course %s",
                 user.username,
                 course_id
             )
-            return HttpResponseBadRequest(_("Course id is invalid"))
+            return HttpResponseBadRequest(json.dumps({"error": _("Course id is invalid")}), content_type="application/json")
+
+        # Subscription check before proceeding with enrollment
+        sub = UserSubscription.objects.filter(user=user, is_active=True).first()
+        if not sub:
+            return HttpResponseBadRequest(json.dumps({"error": "You need an active subscription to enroll."}), content_type="application/json")
+        
+        # Convert end_date to datetime with UTC timezone for comparison
+        end_datetime = datetime.combine(sub.end_date, datetime.min.time()).replace(tzinfo=pytz.UTC)
+        current_datetime = datetime.now(pytz.UTC)
+        if end_datetime < current_datetime:
+            return HttpResponseBadRequest(json.dumps({"error": "You need an active subscription to enroll."}), content_type="application/json")
+
+        # For "limited" subscriptions, ensure user hasn't exceeded course limit
+        sub_type = sub.subscription.course_access_type
+        if sub_type == "limited":
+            enroll_count = CourseEnrollment.objects.filter(user=user, is_active=True).count()
+            if enroll_count >= sub.subscription.allowed_courses:
+                return HttpResponseBadRequest(json.dumps({"error": "You have reached your course enrollment limit."}), content_type="application/json")
 
         # Record the user's email opt-in preference
         if settings.FEATURES.get('ENABLE_MKTG_EMAIL_OPT_IN'):
@@ -399,36 +427,24 @@ def change_enrollment(request, check_access=True):
         available_modes = CourseMode.modes_for_course_dict(course_id)
 
         # Check whether the user is blocked from enrolling in this course
-        # This can occur if the user's IP is on a global blacklist
-        # or if the user is enrolling in a country in which the course
-        # is not available.
         redirect_url = embargo_api.redirect_if_blocked(request, course_id)
         if redirect_url:
-            return HttpResponse(redirect_url)
+            return HttpResponse(json.dumps({"redirect": redirect_url}), content_type="application/json")
 
         if CourseEntitlement.check_for_existing_entitlement_and_enroll(user=user, course_run_key=course_id):
             return HttpResponse(reverse('courseware', args=[str(course_id)]))
 
         # Check that auto enrollment is allowed for this course
-        # (= the course is NOT behind a paywall)
         if CourseMode.can_auto_enroll(course_id):
-            # Enroll the user using the default mode (audit)
-            # We're assuming that users of the course enrollment table
-            # will NOT try to look up the course enrollment model
-            # by its slug.  If they do, it's possible (based on the state of the database)
-            # for no such model to exist, even though we've set the enrollment type
-            # to "audit".
             try:
                 enroll_mode = CourseMode.auto_enroll_mode(course_id, available_modes)
                 if enroll_mode:
                     CourseEnrollment.enroll(user, course_id, check_access=check_access, mode=enroll_mode)
             except Exception:  # pylint: disable=broad-except
-                return HttpResponseBadRequest(_("Could not enroll"))
+                return HttpResponseBadRequest(json.dumps({"error": _("Could not enroll")}), content_type="application/json")
 
         # If we have more than one course mode or professional ed is enabled,
         # then send the user to the choose your track page.
-        # (In the case of no-id-professional/professional ed, this will redirect to a page that
-        # funnels users directly into the verification / payment flow)
         if CourseMode.has_verified_mode(available_modes) or CourseMode.has_professional_mode(available_modes):
             return HttpResponse(
                 reverse("course_modes_choose", kwargs={'course_id': str(course_id)})
@@ -438,32 +454,33 @@ def change_enrollment(request, check_access=True):
             return HttpResponse(reverse('courseware', args=[str(course_id)]))
         else:
             return HttpResponse()
+
     elif action == "unenroll":
         if configuration_helpers.get_value(
             "DISABLE_UNENROLLMENT",
             settings.FEATURES.get("DISABLE_UNENROLLMENT")
         ):
-            return HttpResponseBadRequest(_("Unenrollment is currently disabled"))
+            return HttpResponseBadRequest(json.dumps({"error": _("Unenrollment is currently disabled")}), content_type="application/json")
 
         enrollment = CourseEnrollment.get_enrollment(user, course_id)
         if not enrollment:
-            return HttpResponseBadRequest(_("You are not enrolled in this course"))
+            return HttpResponseBadRequest(json.dumps({"error": _("You are not enrolled in this course")}), content_type="application/json")
 
         certificate_info = cert_info(user, enrollment)
         if certificate_info.get('status') in DISABLE_UNENROLL_CERT_STATES:
-            return HttpResponseBadRequest(_("Your certificate prevents you from unenrolling from this course"))
+            return HttpResponseBadRequest(json.dumps({"error": _("Your certificate prevents you from unenrolling from this course")}), content_type="application/json")
 
         try:
             CourseEnrollment.unenroll(user, course_id)
         except UnenrollmentNotAllowed as exc:
-            return HttpResponseBadRequest(str(exc))
+            return HttpResponseBadRequest(json.dumps({"error": str(exc)}), content_type="application/json")
 
         log.info("User %s unenrolled from %s; sending REFUND_ORDER", user.username, course_id)
         REFUND_ORDER.send(sender=None, course_enrollment=enrollment)
         return HttpResponse()
-    else:
-        return HttpResponseBadRequest(_("Enrollment action is invalid"))
 
+    else:
+        return HttpResponseBadRequest(json.dumps({"error": _("Enrollment action is invalid")}), content_type="application/json")
 
 @require_GET
 @login_required

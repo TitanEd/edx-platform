@@ -27,6 +27,7 @@ from django.core.exceptions import ImproperlyConfigured
 from edx_django_utils.plugins import add_plugins
 from openedx_events.event_bus import merge_producer_configs
 from path import Path as path
+from django.utils.translation import gettext_lazy as _
 
 from openedx.core.djangoapps.plugins.constants import ProjectType, SettingsType
 from openedx.core.lib.derived import derive_settings
@@ -1131,3 +1132,23 @@ BEAMER_PRODUCT_ID = ENV_TOKENS.get('BEAMER_PRODUCT_ID', BEAMER_PRODUCT_ID)
 # .. for now it wil impact country listing in auth flow and user profile.
 # .. eg ['US', 'CA']
 DISABLED_COUNTRIES = ENV_TOKENS.get('DISABLED_COUNTRIES', [])
+
+LANGUAGE_MAP = {
+     'terms': dict(ALL_LANGUAGES),
+     'name': _('Language'),
+}
+COURSE_DISCOVERY_MEANINGS = {
+     'org': {
+         'name': _('Organization'),
+     },
+     'modes': {
+         'name': _('Course Type'),
+         'terms': {
+             'honor': 'Honor',
+             'verified': 'Verified',
+         },
+     },
+     'language': LANGUAGE_MAP,
+}
+COURSE_DISCOVERY_FILTERS = ["org", "language", "modes"]
+
