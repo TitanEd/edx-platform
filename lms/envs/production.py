@@ -1075,7 +1075,8 @@ EXPLICIT_QUEUES = {
         'queue': ORA_WORKFLOW_UPDATE_ROUTING_KEY},
     'openassessment.workflow.tasks.update_workflow_for_submission_task': {
         'queue': ORA_WORKFLOW_UPDATE_ROUTING_KEY},
-
+    'admin_dashboard.tasks.process_course_distribution': {
+        'queue': HIGH_PRIORITY_QUEUE},
 }
 
 LOGO_IMAGE_EXTRA_TEXT = ENV_TOKENS.get('LOGO_IMAGE_EXTRA_TEXT', '')
