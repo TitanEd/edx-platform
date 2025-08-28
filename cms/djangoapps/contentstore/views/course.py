@@ -123,12 +123,14 @@ from ..utils import (
 )
 from .component import ADVANCED_COMPONENT_TYPES
 # Modified import to include get_default_end_date
+# Modified import to include get_default_end_date and ENABLE_DEFAULT_SHOWANSWER_NEVER
 try:
-    from custom_extensions.waffle import get_default_start_date as get_dynamic_start_date, get_grading_policy, get_default_end_date
+    from custom_extensions.waffle import get_default_start_date as get_dynamic_start_date, get_grading_policy, get_default_end_date, ENABLE_DEFAULT_SHOWANSWER_NEVER
 except Exception as e:
     get_dynamic_start_date = None
     get_grading_policy = None
     get_default_end_date = None
+    ENABLE_DEFAULT_SHOWANSWER_NEVER = None
 
 log = logging.getLogger(__name__)
 User = get_user_model()
@@ -1015,13 +1017,21 @@ def create_new_course_in_store(store, user, org, number, run, fields):
         'language': getattr(settings, 'DEFAULT_COURSE_LANGUAGE', 'en'),
         'cert_html_view_enabled': True,
     })
-    # Added by TitanEd ,updated to include end date
+
+    # Set default showanswer value based on waffle switch
+    if ENABLE_DEFAULT_SHOWANSWER_NEVER:
+        fields.update({
+            'showanswer': 'never' if ENABLE_DEFAULT_SHOWANSWER_NEVER.is_enabled() else 'finished'
+        })
+
+    # Added by TitanEd, updated to include end date
     if get_dynamic_start_date and get_grading_policy and get_default_end_date:
         fields.update({
             'start': get_dynamic_start_date(),
             'end': get_default_end_date(),
             'grading_policy': get_grading_policy(),
         })
+
     with modulestore().default_store(store):
         # Creating the course raises DuplicateCourseError if an existing course with this org/name is found
         new_course = modulestore().create_course(
