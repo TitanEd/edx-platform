@@ -1077,6 +1077,12 @@ EXPLICIT_QUEUES = {
         'queue': ORA_WORKFLOW_UPDATE_ROUTING_KEY},
     'admin_dashboard.tasks.process_course_distribution': {
         'queue': HIGH_PRIORITY_QUEUE},
+    'admin_dashboard.tasks.process_bulk_enrollment': {
+        'queue': HIGH_PRIORITY_QUEUE},
+    'admin_dashboard.tasks.create_bulk_users': {
+        'queue': HIGH_PRIORITY_QUEUE},
+    'admin_dashboard.tasks.send_bulk_account_activation_emails': {
+        'queue': HIGH_PRIORITY_QUEUE},
 }
 
 LOGO_IMAGE_EXTRA_TEXT = ENV_TOKENS.get('LOGO_IMAGE_EXTRA_TEXT', '')
