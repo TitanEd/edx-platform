@@ -442,6 +442,10 @@ def set_course_mode_price(request, course_id):
 
 def _section_course_info(course, access):
     """ Provide data for the corresponding dashboard section """
+    from django.db.models import Count
+    from common.djangoapps.student.models import CourseAccessRole, CourseEnrollmentAllowed
+    from custom_extensions.waffle import ENABLE_STUDENT_TEAM_SUMMARY
+
     course_key = course.id
 
     section_data = {
@@ -484,6 +488,52 @@ def _section_course_info(course, access):
         section_data['course_errors'] = [(escape(a), '') for (a, _unused) in modulestore().get_course_errors(course.id)]
     except Exception:  # pylint: disable=broad-except
         section_data['course_errors'] = [('Error fetching errors', '')]
+
+    # Add Student & Team Member Summary metrics
+    staff_instructor_ids = set(CourseAccessRole.objects.filter(
+        course_id=course_key,
+        role__in=['staff', 'instructor']
+    ).values_list('user_id', flat=True).distinct())
+
+    if ENABLE_STUDENT_TEAM_SUMMARY.is_enabled():
+        # When switch is enabled, compute metrics as usual
+        # Only include active students who can see the course on their dashboard
+        enrolled_user_ids = set(CourseEnrollment.objects.filter(
+            course_id=course_key,
+            is_active=True
+        ).exclude(user_id__in=staff_instructor_ids).values_list('user_id', flat=True).distinct())
+
+        # Check if course is visible (not hidden from dashboard)
+        if course.catalog_visibility != 'none':
+            section_data['overall_students'] = len(enrolled_user_ids)
+        else:
+            section_data['overall_students'] = 0  # No users see the course if it's hidden
+
+        section_data['active_students'] = CourseEnrollment.objects.filter(
+            course_id=course_key,
+            is_active=True
+        ).exclude(user_id__in=staff_instructor_ids).values('user_id').distinct().count()
+
+        section_data['inactive_students'] = CourseEnrollmentAllowed.objects.filter(
+            course_id=course_key,
+            user_id__isnull=True
+        ).count()
+
+        section_data['course_team_members'] = len(staff_instructor_ids)
+
+        # Total is the sum of overall_students, course_team_members, and inactive_students
+        section_data['total_unique_users'] = (
+            section_data['overall_students'] +
+            section_data['course_team_members'] +
+            section_data['inactive_students']
+        )
+    else:
+        # When switch is disabled, set student metrics to 0 and hide total
+        section_data['overall_students'] = 0
+        section_data['active_students'] = 0
+        section_data['inactive_students'] = 0
+        section_data['course_team_members'] = len(staff_instructor_ids)
+        section_data['total_unique_users'] = None  # Set to None to hide Total in template
 
     return section_data
 
