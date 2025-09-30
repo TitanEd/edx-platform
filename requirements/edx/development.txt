@@ -817,7 +817,7 @@ edx-search==4.1.1
     #   -r requirements/edx/doc.txt
     #   -r requirements/edx/testing.txt
     #   openedx-forum
-edx-sga==0.25.0
+-e git+https://github.com/TitanEd/edx-sga.git@tels/v0.25.0#egg=edx-sga
     # via
     #   -r requirements/edx/doc.txt
     #   -r requirements/edx/testing.txt

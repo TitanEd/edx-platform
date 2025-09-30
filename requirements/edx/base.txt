@@ -521,7 +521,7 @@ edx-search==4.1.1
     # via
     #   -r requirements/edx/kernel.in
     #   openedx-forum
-edx-sga==0.25.0
+-e git+https://github.com/TitanEd/edx-sga.git@tels/v0.25.0#egg=edx-sga
     # via -r requirements/edx/bundled.in
 edx-submissions==3.8.2
     # via
