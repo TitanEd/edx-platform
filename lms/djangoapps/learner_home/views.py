@@ -451,9 +451,9 @@ def serialize_learner_home_data(data, context):
     return LearnerDashboardSerializer(data, context=context).data
 
 
-class InitializeView(APIView):  # pylint: disable=unused-argument
-    """List of courses a user is enrolled in or entitled to"""
+# ... (Other imports unchanged)
 
+class InitializeView(APIView):
     authentication_classes = (
         JwtAuthentication,
         BearerAuthenticationAllowInactiveUser,
@@ -461,35 +461,21 @@ class InitializeView(APIView):  # pylint: disable=unused-argument
     )
     permission_classes = (IsAuthenticated, NotJwtRestrictedApplication)
 
-    def get(self, request, *args, **kwargs):  # pylint: disable=unused-argument
-        """Get masquerade user and proxy to init request"""
+    def get(self, request, *args, **kwargs):
         masquerade_user = get_masquerade_user(request)
-
         if masquerade_user:
             return self._initialize(masquerade_user, is_masquerade=True)
         else:
             return self._initialize(request.user)
 
     def _initialize(self, user, is_masquerade=False):
-        """
-        Load information required for displaying the learner home
-        """
-        # Determine if user needs to confirm email account
         email_confirmation = get_user_account_confirmation_info(user)
-
-        # Gather info for enterprise dashboard
         enterprise_customer = get_enterprise_customer(user, self.request, is_masquerade)
-
-        # Get site-wide social sharing config
         social_share_settings = get_social_share_settings()
-
-        # Get platform-level settings
         platform_settings = get_platform_settings()
-
-        # Get the org whitelist or the org blacklist for the current site
         site_org_whitelist, site_org_blacklist = get_org_block_and_allow_lists()
 
-        # Get entitlements and course overviews for serializing
+        # Get entitlements and course overviews
         (
             fulfilled_entitlements_by_course_key,
             unfulfilled_entitlements,
@@ -508,27 +494,27 @@ class InitializeView(APIView):  # pylint: disable=unused-argument
         # Get audit access deadlines
         audit_access_deadlines = get_audit_access_deadlines(user, course_enrollments)
 
-        # Get email opt-outs for student
+        # Get email opt-outs
         show_email_settings_for, course_optouts = get_email_settings_info(
             user, course_enrollments
         )
 
-        # Get grade passing status by course
+        # Get grade passing status
         grade_statuses = get_user_grade_passing_statuses(course_enrollments)
 
-        # Get cert status by course
+        # Get cert status
         cert_statuses = get_cert_statuses(user, course_enrollments)
 
-        # Determine view access for course, (for showing courseware link) involves:
+        # Get course access checks
         course_access_checks = check_course_access(user, course_enrollments)
 
-        # Get programs related to the courses the user is enrolled in
+        # Get programs
         programs = get_course_programs(user, course_enrollments, self.request.site)
 
-        # e-commerce info
+        # Get e-commerce info
         ecommerce_payment_page = get_ecommerce_payment_page(user)
 
-        # Gather urls for course card resume buttons.
+        # Get resume URLs
         resume_button_urls = get_resume_urls_for_course_enrollments(
             user, course_enrollments
         )
@@ -536,7 +522,7 @@ class InitializeView(APIView):  # pylint: disable=unused-argument
         # Get suggested courses
         suggested_courses = get_suggested_courses().get("courses", [])
 
-        # Get social media sharing config
+        # Get course share URLs
         course_share_urls = get_course_share_urls(course_enrollments)
 
         # Get credit availability
@@ -553,6 +539,7 @@ class InitializeView(APIView):  # pylint: disable=unused-argument
         }
 
         context = {
+            "user": user,  # Ensure user is included in context
             "audit_access_deadlines": audit_access_deadlines,
             "ecommerce_payment_page": ecommerce_payment_page,
             "cert_statuses": cert_statuses,
@@ -572,5 +559,4 @@ class InitializeView(APIView):  # pylint: disable=unused-argument
         }
 
         response_data = serialize_learner_home_data(learner_dash_data, context)
-
         return Response(response_data)

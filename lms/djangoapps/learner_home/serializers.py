@@ -16,6 +16,10 @@ from common.djangoapps.course_modes.models import CourseMode
 from openedx.features.course_experience import course_home_url
 from xmodule.data import CertificatesDisplayBehaviors
 from lms.djangoapps.learner_home.utils import course_progress_url
+from access_subscriptions.models import UserSubscription, Subscription
+from openedx.core.djangoapps.content.course_overviews.models import CourseOverview
+import logging
+logger = logging.getLogger(__name__)
 
 
 class LiteralField(serializers.Field):
@@ -155,54 +159,92 @@ class CourseRunSerializer(serializers.Serializer):
 class CoursewareAccessSerializer(serializers.Serializer):
     """
     Info determining whether a user should be able to view course material.
-    Mirrors logic in "show_courseware_links_for" from old dashboard.py
+    Mirrors logic in 'show_courseware_links_for' from old dashboard.py
     """
-
     requires_context = True
 
     hasUnmetPrerequisites = serializers.SerializerMethodField()
     isTooEarly = serializers.SerializerMethodField()
     isStaff = serializers.SerializerMethodField()
+    lacksSubscription = serializers.SerializerMethodField()
+    hasActiveSubscription = serializers.SerializerMethodField()
 
     def _get_course_access_checks(self, enrollment):
         """Internal helper to unpack access object for this particular enrollment"""
-        return self.context.get("course_access_checks", {}).get(
-            enrollment.course_id, {}
-        )
+        return self.context.get("course_access_checks", {}).get(enrollment.course_id, {})
 
     def get_hasUnmetPrerequisites(self, enrollment):
-        """Whether or not a course has unmet prerequisites"""
-        return self._get_course_access_checks(enrollment).get(
-            "has_unmet_prerequisites", False
-        )
+        user = self.context.get('user')
+        if not user:
+            logger.error(f"CoursewareAccessSerializer: No user in context for enrollment {enrollment.course_id}")
+            return True  # Default to restrictive access
+        if user.is_authenticated and (user.is_superuser or user.is_staff or self._get_course_access_checks(enrollment).get("user_has_staff_access", False)):
+            logger.debug(f"User {user.username} (ID: {user.id}) is staff or superuser, no prerequisites required for course {enrollment.course_id}")
+            return False
+        has_prereqs = self._get_course_access_checks(enrollment).get("has_unmet_prerequisites", False)
+        logger.debug(f"User {user.username} (ID: {user.id}) has_unmet_prerequisites={has_prereqs} for course {enrollment.course_id}")
+        return has_prereqs
 
     def get_isTooEarly(self, enrollment):
-        """Determine if the course is open to a learner (course has started or user has early beta access)"""
-        return self._get_course_access_checks(enrollment).get(
-            "is_too_early_to_view", False
-        )
+        user = self.context.get('user')
+        if not user:
+            logger.error(f"CoursewareAccessSerializer: No user in context for enrollment {enrollment.course_id}")
+            return True  # Default to restrictive access
+        if user.is_authenticated and (user.is_superuser or user.is_staff or self._get_course_access_checks(enrollment).get("user_has_staff_access", False)):
+            logger.debug(f"User {user.username} (ID: {user.id}) is staff or superuser, bypassing start date check for course {enrollment.course_id}")
+            return False
+        is_too_early = self._get_course_access_checks(enrollment).get("is_too_early_to_view", False)
+        logger.debug(f"User {user.username} (ID: {user.id}) is_too_early={is_too_early} for course {enrollment.course_id}")
+        return is_too_early
 
     def get_isStaff(self, enrollment):
-        """Determine whether a user has staff access to this course"""
-        return self._get_course_access_checks(enrollment).get(
-            "user_has_staff_access", False
-        )
+        user = self.context.get('user')
+        if not user:
+            logger.error(f"CoursewareAccessSerializer: No user in context for enrollment {enrollment.course_id}")
+            return False  # Default to non-staff
+        is_staff = user.is_authenticated and (user.is_superuser or user.is_staff or self._get_course_access_checks(enrollment).get("user_has_staff_access", False))
+        logger.debug(f"User {user.username} (ID: {user.id}) is_staff={is_staff} for course {enrollment.course_id}")
+        return is_staff
+
+    def get_lacksSubscription(self, enrollment):
+        user = self.context.get('user')
+        if not user:
+            logger.error(f"CoursewareAccessSerializer: No user in context for enrollment {enrollment.course_id}")
+            return True  # Default to requiring subscription
+        if user.is_authenticated:
+            if user.is_superuser or user.is_staff or self._get_course_access_checks(enrollment).get("user_has_staff_access", False):
+                logger.debug(f"User {user.id} (username: {user.username}) is staff or superuser, skipping subscription check for course {enrollment.course_id}")
+                return False
+            subscription = UserSubscription.objects.filter(
+                user=user,
+                is_active=True,
+                end_date__gte=timezone.now()
+            ).select_related('subscription').first()
+            if not subscription:
+                logger.debug(f"No active subscription found for user {user.id} (username: {user.username}) for course {enrollment.course_id}")
+                return True
+            if subscription.subscription.course_access_type == 'Specific':
+                if not subscription.subscription.specific_courses.filter(id=enrollment.course_id).exists():
+                    logger.debug(f"Course {enrollment.course_id} not in specific subscription for user {user.id} (username: {user.username})")
+                    return True
+            logger.debug(f"Active subscription found for user {user.id} (username: {user.username}): end_date={subscription.end_date} for course {enrollment.course_id}")
+            return False
+        logger.debug(f"User is not authenticated, setting lacksSubscription to True for course {enrollment.course_id}")
+        return True
+
+    def get_hasActiveSubscription(self, enrollment):
+        lacks_subscription = self.get_lacksSubscription(enrollment)
+        has_active = not lacks_subscription
+        user = self.context.get('user')
+        if user:
+            logger.debug(f"User {user.username} (ID: {user.id}) has_active_subscription={has_active} for course {enrollment.course_id}")
+        return has_active
 
 
 class EnrollmentSerializer(serializers.Serializer):
     """
     Info about this particular enrollment.
-    Derived from a CourseEnrollment with added context:
-    - "audit_access_deadlines" (dict): when audit access expires for user.
-    - "ecommerce_payment_page" (url): ecommerce page, used to determine if we can upgrade.
-    - "course_mode_info" (dict): keyed by course ID with the following values:
-        - "show_upsell" (bool): whether or not we offer an upsell for this course.
-        - "verified_sku" (uuid): ID for the verified mode for upgrade.
-    - "show_courseware_link": keyed by course ID with added metadata.
-    - "show_email_settings_for" (dict): keyed by course ID with a boolean whether we
-       show email settings.
     """
-
     requires_context = True
 
     accessExpirationDate = serializers.SerializerMethodField()
@@ -217,6 +259,9 @@ class EnrollmentSerializer(serializers.Serializer):
     lastEnrolled = serializers.DateTimeField(source="created")
     isEnrolled = serializers.BooleanField(source="is_active")
     mode = serializers.CharField()
+    lacksSubscription = serializers.SerializerMethodField()
+    hasActiveSubscription = serializers.SerializerMethodField()
+    isSubscriptionExpired = serializers.SerializerMethodField()
 
     def get_accessExpirationDate(self, instance):
         return self.context.get("audit_access_deadlines", {}).get(instance.course_id)
@@ -225,21 +270,15 @@ class EnrollmentSerializer(serializers.Serializer):
         return enrollment.mode in CourseMode.AUDIT_MODES
 
     def get_hasStarted(self, enrollment):
-        """Determined based on whether there's a 'resume' link on the course"""
-        resume_button_url = self.context.get("resume_course_urls", {}).get(
-            enrollment.course_id
-        )
+        resume_button_url = self.context.get("resume_course_urls", {}).get(enrollment.course_id)
         return bool(resume_button_url)
 
     def get_isVerified(self, enrollment):
         return enrollment.is_verified_enrollment()
 
     def get_canUpgrade(self, enrollment):
-        """Determine if a user can upgrade this enrollment to verified track"""
         use_ecommerce_payment_flow = bool(self.context.get("ecommerce_payment_page"))
-        course_mode_info = self.context.get("course_mode_info", {}).get(
-            enrollment.course_id, {}
-        )
+        course_mode_info = self.context.get("course_mode_info", {}).get(enrollment.course_id, {})
         return bool(
             use_ecommerce_payment_flow
             and course_mode_info.get("show_upsell", False)
@@ -247,11 +286,7 @@ class EnrollmentSerializer(serializers.Serializer):
         )
 
     def get_isAuditAccessExpired(self, enrollment):
-        """Mirrors logic in "check_course_expired" but using pre-fetched expiration date"""
-        expiration_date = self.context.get("audit_access_deadlines", {}).get(
-            enrollment.course_id
-        )
-
+        expiration_date = self.context.get("audit_access_deadlines", {}).get(enrollment.course_id)
         return bool(expiration_date) and timezone.now() > expiration_date
 
     def get_isEmailEnabled(self, enrollment):
@@ -260,8 +295,35 @@ class EnrollmentSerializer(serializers.Serializer):
     def get_hasOptedOutOfEmail(self, enrollment):
         return enrollment.course_id in self.context.get("course_optouts", [])
 
+    def get_lacksSubscription(self, enrollment):
+        user = self.context.get('user')
+        if not user:
+            logger.error(f"EnrollmentSerializer: No user in context for enrollment {enrollment.course_id}")
+            return True
+        courseware_access = CoursewareAccessSerializer(enrollment, context=self.context).data
+        lacks_subscription = courseware_access.get('lacksSubscription', True)
+        logger.debug(f"User {user.username} (ID: {user.id}) lacks_subscription={lacks_subscription} for course {enrollment.course_id}")
+        return lacks_subscription
+
+    def get_hasActiveSubscription(self, enrollment):
+        user = self.context.get('user')
+        if not user:
+            logger.error(f"EnrollmentSerializer: No user in context for enrollment {enrollment.course_id}")
+            return False
+        courseware_access = CoursewareAccessSerializer(enrollment, context=self.context).data
+        has_active = courseware_access.get('hasActiveSubscription', False)
+        logger.debug(f"User {user.username} (ID: {user.id}) has_active_subscription={has_active} for course {enrollment.course_id}")
+        return has_active
+
+    def get_isSubscriptionExpired(self, enrollment):
+        has_active = self.get_hasActiveSubscription(enrollment)
+        is_expired = not has_active
+        user = self.context.get('user')
+        if user:
+            logger.debug(f"User {user.username} (ID: {user.id}) is_subscription_expired={is_expired} for course {enrollment.course_id}")
+        return is_expired
+
     def to_representation(self, instance):
-        """Serialize the enrollment instance to be able to update the values before the API finishes rendering."""
         serialized_enrollment = super().to_representation(instance)
         course_key, serialized_enrollment = CourseEnrollmentAPIRenderStarted().run_filter(
             course_key=instance.course_id,

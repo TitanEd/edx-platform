@@ -65,6 +65,11 @@ from common.djangoapps.util.milestones_helpers import (
 from xmodule.course_block import CATALOG_VISIBILITY_ABOUT, CATALOG_VISIBILITY_CATALOG_AND_ABOUT, CourseBlock  # lint-amnesty, pylint: disable=wrong-import-order
 from xmodule.error_block import ErrorBlock  # lint-amnesty, pylint: disable=wrong-import-order
 from xmodule.partitions.partitions import NoSuchUserPartitionError, NoSuchUserPartitionGroupError  # lint-amnesty, pylint: disable=wrong-import-order
+from django.utils import timezone
+from access_subscriptions.models import UserSubscription
+from common.djangoapps.student.models import CourseEnrollment
+from datetime import datetime
+import pytz
 
 log = logging.getLogger(__name__)
 
@@ -346,19 +351,6 @@ def _has_access_course(user, action, courselike):
 
         NOTE: this is not checking whether user is actually enrolled in the course.
         """
-        # N.B. I'd love a better way to handle this pattern, without breaking the
-        # shortcircuiting logic. Maybe AccessResponse needs to grow a
-        # fluent interface?
-        #
-        # return (
-        #     _visible_to_nonstaff_users(courselike).and(
-        #         check_course_open_for_learner, user, courselike
-        #     ).and(
-        #         _can_view_courseware_with_prerequisites, user, courselike
-        #     )
-        # ).or(
-        #     _has_staff_access_to_block, user, courselike, courselike.id
-        # )
         if courselike.id.deprecated:  # we no longer support accessing Old Mongo courses
             return OldMongoAccessError(courselike)
 
@@ -394,14 +386,46 @@ def _has_access_course(user, action, courselike):
             else:
                 return has_not_expired
 
+        # Additional subscription check for non-staff users
+        if user.is_authenticated and not (user.is_superuser or user.is_staff):
+            sub = UserSubscription.objects.filter(
+                user=user,
+                is_active=True,
+                end_date__gte=timezone.now()
+            ).select_related('subscription').first()
+            if not sub:
+                return ACCESS_DENIED  # No active subscription
+            if sub.subscription.course_access_type == 'Specific':
+                if not sub.subscription.specific_courses.filter(id=courselike.id).exists():
+                    return ACCESS_DENIED  # Course not in specific subscription
+
         return ACCESS_GRANTED
 
     @function_trace('can_enroll')
     def can_enroll():
         """
-        Returns whether the user can enroll in the course.
+        Returns whether the user can enroll in the course based on subscription and enrollment window.
         """
-        return _can_enroll_courselike(user, courselike)
+        # First check the original enrollment window logic
+        enrollment_response = _can_enroll_courselike(user, courselike)
+        if enrollment_response != ACCESS_GRANTED:
+            return enrollment_response
+
+        # Additional subscription check for non-staff users
+        if user.is_authenticated and not (user.is_superuser or user.is_staff):
+            sub = UserSubscription.objects.filter(
+                user=user,
+                is_active=True,
+                end_date__gte=timezone.now()
+            ).select_related('subscription').first()
+            if not sub:
+                return ACCESS_DENIED  # No active subscription
+            if sub.subscription.course_access_type == 'Specific':
+                if not sub.subscription.specific_courses.filter(id=courselike.id).exists():
+                    return ACCESS_DENIED  # Course not in specific subscription
+            # For 'All' subscription or other cases, allow enrollment if subscription is valid
+
+        return ACCESS_GRANTED
 
     @function_trace('see_exists')
     def see_exists():
@@ -567,7 +591,6 @@ def _has_group_access(block, user, course_key):
     # all checks passed.
     return ACCESS_GRANTED
 
-
 def _has_access_to_block(user, action, block, course_key=None):
     """
     Check if user has access to this block.
@@ -580,26 +603,33 @@ def _has_access_to_block(user, action, block, course_key=None):
     (e.g. courses).  If you call this method directly instead of going through
     has_access(), it will not do the right thing.
     """
+    
     def can_load():
         """
-        NOTE: This does not check that the student is enrolled in the course
-        that contains this block.  We may or may not want to allow non-enrolled
-        students to see blocks.  If not, views should check the course, so we
-        don't have to hit the enrollments table on every block load.
+        Check if the user can load this block.
         """
-        # If the user (or the role the user is currently masquerading as) does not have
-        # access to this content, then deny access. The problem with calling _has_staff_access_to_block
-        # before this method is that _has_staff_access_to_block short-circuits and returns True
-        # for staff users in preview mode.
+        # Group access check
         group_access_response = _has_group_access(block, user, course_key)
         if not group_access_response:
             return group_access_response
 
-        # If the user has staff access, they can load the block and checks below are not needed.
+        # Staff access bypasses other checks
         staff_access_response = _has_staff_access_to_block(user, block, course_key)
         if staff_access_response:
             return staff_access_response
 
+        # Subscription check for non-staff users
+        if not user.is_staff and not user.is_superuser:
+            has_active_subscription = UserSubscription.objects.filter(
+                user=user,
+                is_active=True,
+                end_date__gte=timezone.now()
+            ).exists()
+            print(f"DEBUG: _has_access_to_block - has_active_subscription={has_active_subscription} for user {user.username}, course {course_key}")
+            if not has_active_subscription:
+                return False  # Deny access if no active subscription
+
+        # Course start date check
         return (
             _visible_to_nonstaff_users(block, display_error_to_user=False) and
             (
@@ -621,7 +651,6 @@ def _has_access_to_block(user, action, block, course_key=None):
     }
 
     return _dispatch(checkers, action, user, block)
-
 
 def _has_access_location(user, action, location, course_key):
     """

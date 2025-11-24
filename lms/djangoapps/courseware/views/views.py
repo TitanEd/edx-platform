@@ -146,6 +146,7 @@ from openedx.features.course_experience.url_helpers import (
 from openedx.features.course_experience.utils import dates_banner_should_display
 from openedx.features.course_experience.waffle import ENABLE_COURSE_ABOUT_SIDEBAR_HTML
 from openedx.features.enterprise_support.api import data_sharing_consent_required
+from lms.djangoapps.courseware.access import _has_access_course
 
 from ..block_render import get_block, get_block_by_usage_id, get_block_for_descriptor
 from ..tabs import _get_dynamic_tabs
@@ -778,8 +779,8 @@ class EnrollStaffView(View):
 
 
 @ensure_csrf_cookie
-@ensure_valid_course_key
 @cache_if_anonymous()
+@ensure_valid_course_key
 def course_about(request, course_id):  # pylint: disable=too-many-statements
     """
     Display the course's about page.
@@ -842,8 +843,9 @@ def course_about(request, course_id):  # pylint: disable=too-many-statements
 
         registration_price, course_price = get_course_prices(course)  # lint-amnesty, pylint: disable=unused-variable
 
-        # Used to provide context to message to student if enrollment not allowed
-        can_enroll = bool(request.user.has_perm(ENROLL_IN_COURSE, course))
+        # Compute can_enroll using the updated access.py logic yagnesh
+        can_enroll = bool(_has_access_course(request.user, 'enroll', course))
+
         invitation_only = course_is_invitation_only(course)
         is_course_full = CourseEnrollment.objects.is_course_full(course)
 
@@ -910,7 +912,6 @@ def course_about(request, course_id):  # pylint: disable=too-many-statements
             response = render_to_response(course_about_template, context)
 
         return response
-
 
 @ensure_csrf_cookie
 @cache_if_anonymous()
