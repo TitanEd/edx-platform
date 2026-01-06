@@ -5,6 +5,8 @@ Views for Learner Home
 import logging
 from collections import OrderedDict
 
+from urllib3 import request
+
 from completion.exceptions import UnavailableCompletionData
 from completion.utilities import get_key_to_last_completed_block
 from django.conf import settings
@@ -63,6 +65,7 @@ from openedx.features.enterprise_support.api import (
     enterprise_customer_from_session_or_learner_data,
     get_enterprise_learner_data_from_db,
 )
+from xmodule.modulestore.exceptions import ItemNotFoundError
 
 logger = logging.getLogger(__name__)
 
@@ -258,7 +261,7 @@ def get_org_block_and_allow_lists():
 
 
 @function_trace("get_resume_urls_for_course_enrollments")
-def get_resume_urls_for_course_enrollments(user, course_enrollments):
+def get_resume_urls_for_course_enrollments(user, course_enrollments, request=request):
     """
     Modeled off of get_resume_urls_for_enrollments but removes check for actual presence of block
     in course structure for better performance.
@@ -269,10 +272,22 @@ def get_resume_urls_for_course_enrollments(user, course_enrollments):
         try:
             block_key = get_key_to_last_completed_block(user, enrollment.course_id)
             if block_key:
-                url_to_block = reverse(
-                    "jump_to",
-                    kwargs={"course_id": enrollment.course_id, "location": block_key},
-                )
+                # usage_key = UsageKey.from_string(block_key)
+                from lms.djangoapps.courseware.access import has_access
+                from openedx.features.course_experience.url_helpers import get_courseware_url
+                staff_access = has_access(user, 'staff', enrollment.course_id)
+                try:
+                    get_courseware_url(
+                        usage_key=block_key,
+                        request=request,
+                        is_staff=staff_access,
+                    )
+                    url_to_block = reverse(
+                        "jump_to",
+                        kwargs={"course_id": enrollment.course_id, "location": block_key},
+                    )
+                except Exception as e:
+                    pass
         except UnavailableCompletionData:
             # This is acceptable, the user hasn't started the course so jump URL will be None
             pass
@@ -464,7 +479,7 @@ class InitializeView(APIView):  # pylint: disable=unused-argument
     def get(self, request, *args, **kwargs):  # pylint: disable=unused-argument
         """Get masquerade user and proxy to init request"""
         masquerade_user = get_masquerade_user(request)
-
+        self.request = request
         if masquerade_user:
             return self._initialize(masquerade_user, is_masquerade=True)
         else:
@@ -530,7 +545,7 @@ class InitializeView(APIView):  # pylint: disable=unused-argument
 
         # Gather urls for course card resume buttons.
         resume_button_urls = get_resume_urls_for_course_enrollments(
-            user, course_enrollments
+            user, course_enrollments, request=self.request
         )
 
         # Get suggested courses
