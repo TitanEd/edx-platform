@@ -11,7 +11,7 @@ from django.utils import timezone
 from opaque_keys.edx.keys import CourseKey
 from rest_framework import serializers
 from openedx_filters.learning.filters import CourseEnrollmentAPIRenderStarted, CourseRunAPIRenderStarted
-
+from lms.djangoapps.courseware.access import has_access
 from common.djangoapps.course_modes.models import CourseMode
 from openedx.features.course_experience import course_home_url
 from xmodule.data import CertificatesDisplayBehaviors
@@ -217,6 +217,15 @@ class EnrollmentSerializer(serializers.Serializer):
     lastEnrolled = serializers.DateTimeField(source="created")
     isEnrolled = serializers.BooleanField(source="is_active")
     mode = serializers.CharField()
+    # Added by Mahendra
+    allowUnenrollment = serializers.SerializerMethodField()
+    allowResume = serializers.SerializerMethodField()
+
+    def get_allowUnenrollment(self, enrollment):
+        return True
+
+    def get_allowResume(self, enrollment):
+        return True
 
     def get_accessExpirationDate(self, instance):
         return self.context.get("audit_access_deadlines", {}).get(instance.course_id)
@@ -259,6 +268,49 @@ class EnrollmentSerializer(serializers.Serializer):
 
     def get_hasOptedOutOfEmail(self, enrollment):
         return enrollment.course_id in self.context.get("course_optouts", [])
+
+    # Added by Mahendra
+    def get_allowUnenrollment(self, enrollment):
+        """
+        Determines whether a user is allowed to unenroll from a course.
+
+        If ENABLE_ENHANCED_COURSE_ACCESS_CONTROL switch is active, then only allow unenrollment for learners
+        if the course has ended. Otherwise, unenrollment is disabled.
+        """
+        allow_unenrollment = True
+        try:
+            from custom_extensions.waffle import ENABLE_ENHANCED_COURSE_ACCESS_CONTROL  # Import feature flag
+            if ENABLE_ENHANCED_COURSE_ACCESS_CONTROL.is_enabled():
+                is_learner = not (
+                    has_access(enrollment.user, 'staff', enrollment.course_overview.id) or
+                    has_access(enrollment.user, 'instructor', enrollment.course_overview.id)
+                )
+                if is_learner:
+                    allow_unenrollment = enrollment.course_overview.has_ended()
+        except Exception:
+            pass
+        return allow_unenrollment
+
+    def get_allowResume(self, enrollment):
+        """
+        Determines whether a user is allowed to resume a course.
+
+        If ENABLE_ENHANCED_COURSE_ACCESS_CONTROL switch is active, only allow resume course for learners
+        if the course has not ended. Otherwise, resume course is disabled.
+        """
+        allow_resume = True
+        try:
+            from custom_extensions.waffle import ENABLE_ENHANCED_COURSE_ACCESS_CONTROL  # Import feature flag
+            if ENABLE_ENHANCED_COURSE_ACCESS_CONTROL.is_enabled():
+                is_learner = not (
+                    has_access(enrollment.user, 'staff', enrollment.course_overview.id) or
+                    has_access(enrollment.user, 'instructor', enrollment.course_overview.id)
+                )
+                if is_learner:
+                    allow_resume = not enrollment.course_overview.has_ended()
+        except Exception:
+            pass
+        return allow_resume
 
     def to_representation(self, instance):
         """Serialize the enrollment instance to be able to update the values before the API finishes rendering."""
