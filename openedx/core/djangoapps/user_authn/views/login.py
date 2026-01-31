@@ -494,6 +494,19 @@ def enterprise_selection_page(request, user, next_url):
     return redirect_url
 
 
+def _log_and_raise_blocked_user_auth_error():
+    """
+    Logging an auth attempt by a blocked user and raising an error with the correct message.
+    """
+    raise AuthFailedError(
+        _('Your account has been blocked. Please contact administrator.'),
+        error_code='account-locked-out',
+        context={
+            'blocked_reason': _('Your account has been blocked. Please contact administrator.')
+        }
+    )
+
+
 @ensure_csrf_cookie
 @require_http_methods(['POST'])
 @ratelimit(
@@ -594,6 +607,9 @@ def login_user(request, api_version='v1'):  # pylint: disable=too-many-statement
                 # Important: This call must be made AFTER the user was successfully authenticated.
                 _enforce_password_policy_compliance(request, possibly_authenticated_user)
 
+        # Added by Mahendra - 31/01/2026
+        if user.industry_profile.is_block:
+            _log_and_raise_blocked_user_auth_error()
         if possibly_authenticated_user is None or not (
             possibly_authenticated_user.is_active or settings.MARKETING_EMAILS_OPT_IN
         ):
