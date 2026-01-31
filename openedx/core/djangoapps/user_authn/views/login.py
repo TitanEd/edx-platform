@@ -500,7 +500,7 @@ def _log_and_raise_blocked_user_auth_error():
     """
     raise AuthFailedError(
         _('Your account has been blocked. Please contact administrator.'),
-        error_code='account-locked-out',
+        error_code='account-blocked',
         context={
             'blocked_reason': _('Your account has been blocked. Please contact administrator.')
         }
