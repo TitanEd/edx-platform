@@ -272,41 +272,37 @@ def _update_social_context(request, context, course, user_certificate, platform_
     Updates context dictionary with info required for social sharing.
     """
     share_settings = configuration_helpers.get_value("SOCIAL_SHARING_SETTINGS", settings.SOCIAL_SHARING_SETTINGS)
-    context['facebook_share_enabled'] = share_settings.get('CERTIFICATE_FACEBOOK', False)
-    context['facebook_app_id'] = configuration_helpers.get_value("FACEBOOK_APP_ID", settings.FACEBOOK_APP_ID)
-    context['facebook_share_text'] = share_settings.get(
-        'CERTIFICATE_FACEBOOK_TEXT',
-        _("I completed the {course_title} course on {platform_name}.").format(
-            course_title=context['accomplishment_copy_course_name'],
-            platform_name=platform_name
-        )
+    share_url = request.build_absolute_uri(
+        get_certificate_url(course_id=course.id, uuid=user_certificate.verify_uuid)
     )
-    context['twitter_share_enabled'] = share_settings.get('CERTIFICATE_TWITTER', False)
-    context['twitter_share_text'] = share_settings.get(
-        'CERTIFICATE_TWITTER_TEXT',
-        _("I completed a course at {platform_name}. Take a look at my certificate.").format(
-            platform_name=platform_name
-        )
+    # Updated by Mahendra to add whatsapp share url
+    whatsapp_share_text = "Check out my {course_title} certificate on {platform_name}"
+    whatsapp_share_url = "https://wa.me/?text={whatsapp_share_text}&url={share_url}".format(
+        whatsapp_share_text=smart_str(whatsapp_share_text),
+        share_url=urllib.parse.quote_plus(smart_str(share_url)),
     )
-
-    share_url = request.build_absolute_uri(get_certificate_url(course_id=course.id, uuid=user_certificate.verify_uuid))
-    context['share_url'] = share_url
-    twitter_url = ''
-    if context.get('twitter_share_enabled', False):
-        twitter_url = 'https://twitter.com/intent/tweet?text={twitter_share_text}&url={share_url}'.format(
-            twitter_share_text=smart_str(context['twitter_share_text']),
-            share_url=urllib.parse.quote_plus(smart_str(share_url))
-        )
-    context['twitter_url'] = twitter_url
-    context['linked_in_url'] = None
-    # If enabled, show the LinkedIn "add to profile" button
-    # Clicking this button sends the user to LinkedIn where they
-    # can add the certificate information to their profile.
-    linkedin_config = LinkedInAddToProfileConfiguration.current()
-    if linkedin_config.is_enabled():
-        context['linked_in_url'] = linkedin_config.add_to_profile_url(
-            course.display_name, user_certificate.mode, smart_str(share_url), certificate=user_certificate
-        )
+    email_share_subject = "My {course_title} certificate on {platform_name}".format(
+        course_title=context["accomplishment_copy_course_name"],
+        platform_name=platform_name,
+    )
+    email_share_body = "Check out my certificate: {share_url}".format(
+        share_url=urllib.parse.quote_plus(smart_str(share_url)),
+    )
+    email_share_url = "mailto:?subject={email_share_subject}&body={email_share_body}".format(
+        email_share_subject=smart_str(email_share_subject),
+        email_share_body=smart_str(email_share_body),
+    )
+    linkedin_share_url = "https://www.linkedin.com/sharing/share-offsite/?url={share_url}".format(
+        share_url=urllib.parse.quote_plus(smart_str(share_url)),
+    )
+    facebook_share_url = "https://www.facebook.com/sharer/sharer.php?u={share_url}".format(
+        share_url=urllib.parse.quote_plus(smart_str(share_url)),
+    )
+    context["whatsapp_share_url"] = whatsapp_share_url
+    context["email_share_url"] = email_share_url
+    context["linkedin_share_url"] = linkedin_share_url
+    context["facebook_share_url"] = facebook_share_url
+    context["share_url"] = share_url
 
 
 def _update_context_with_user_info(context, user, user_certificate):
